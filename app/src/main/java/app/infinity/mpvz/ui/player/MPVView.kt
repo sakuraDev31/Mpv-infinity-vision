@@ -111,6 +111,27 @@ class MPVView(
   private var interpolationOutputFrameRate: Double? = null
   private val mpvFlowDiagnosticsScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
   private var mpvFlowDiagnosticsJob: Job? = null
+  private val rexVisionRuntime by lazy { RexVisionRuntime(context, decoderPreferences) }
+  private var rexVisionJob: Job? = null
+
+  private fun startRexVision() {
+    if (rexVisionJob?.isActive == true) return
+    rexVisionJob = mpvFlowDiagnosticsScope.launch {
+      while (isActive && isSurfaceReady) {
+        runCatching { rexVisionRuntime.tick() }.onFailure { error ->
+          Log.w(TAG, "REX Vision failed; restoring native playback settings", error)
+          rexVisionRuntime.stop()
+        }
+        delay(2000)
+      }
+    }
+  }
+
+  private fun stopRexVision() {
+    rexVisionJob?.cancel()
+    rexVisionJob = null
+    rexVisionRuntime.stop()
+  }
   private val mpvFlowCaptureControlFile = java.io.File(context.cacheDir, "mpvflow-diagnostic-control.txt")
   private var mpvFlowCaptureControlConfigured = false
   private var mpvFlowCaptureSessionId: String? = null
@@ -221,9 +242,11 @@ class MPVView(
     holder.addCallback(this)
     if (holder.surface.isValid && !isSurfaceReady) surfaceCreated(holder)
     updateMpvFlowDiagnostics()
+    if (isSurfaceReady) startRexVision()
   }
 
   fun releaseSurface() {
+    stopRexVision()
     stopFlowDiagnosticCapture()
     stopMpvFlowDiagnostics()
     holder.removeCallback(this)
@@ -1103,6 +1126,7 @@ class MPVView(
       Log.d(TAG, "MPV_ASPECT_DIAGNOSTIC component=surface event=surface_created valid=${holder.surface.isValid}")
     }
     isSurfaceReady = PlaybackSession.bindSurface(holder.surface, width, height, this)
+    if (isSurfaceReady) startRexVision()
     updateSurfaceFrameRateHint()
     updateMpvFlowDiagnostics()
     post {
@@ -1113,6 +1137,7 @@ class MPVView(
   }
 
   override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {
+    stopRexVision()
     if (BuildConfig.DEBUG) {
       Log.d(TAG, "MPV_ASPECT_DIAGNOSTIC component=surface event=surface_destroyed")
     }
@@ -1122,6 +1147,7 @@ class MPVView(
   }
 
   override fun onDetachedFromWindow() {
+    stopRexVision()
     stopMpvFlowDiagnostics()
     super.onDetachedFromWindow()
   }

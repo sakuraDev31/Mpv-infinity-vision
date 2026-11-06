@@ -71,6 +71,7 @@ internal fun effectiveMpvFlowSearchRadius(targetFps: Int, quality: Int): Int {
 class DecoderPreferences(
   preferenceStore: PreferenceStore,
 ) {
+  internal val rexVision = RexVisionPreferences(preferenceStore)
   val playbackEngine = preferenceStore.getEnum("playback_engine", PlaybackEngineMode.AUTO)
   val profile = preferenceStore.getString("mpv_profile", "fast")
   val tryHWDecoding = preferenceStore.getBoolean("try_hw_dec", true)
@@ -111,4 +112,33 @@ class DecoderPreferences(
   val anime4kDarken = preferenceStore.getBoolean("anime4k_darken", false)
   val anime4kThin = preferenceStore.getBoolean("anime4k_thin", false)
   val anime4kDeblur = preferenceStore.getBoolean("anime4k_deblur", false)
+}
+
+/** Kept in the existing preference store so backup/restore and process death work normally. */
+internal class RexVisionPreferences(store: PreferenceStore) {
+  val enabled = store.getBoolean("rex_vision_enabled", false)
+  val adaptive = store.getBoolean("rex_vision_adaptive", true)
+  val preset = store.getString("rex_vision_preset", "Balanced")
+  val algorithms = store.getStringSet("rex_vision_algorithms", app.infinity.mpvz.ui.player.RexVisionPolicy.defaults)
+  val values = app.infinity.mpvz.ui.player.RexVisionPolicy.algorithms.associate { algorithm ->
+    val default = when (algorithm.id) {
+      "lanczos" -> "3"
+      "debanding" -> "12"
+      "deringing" -> "70"
+      "sharpening" -> "10"
+      "gamma" -> "0"
+      else -> algorithm.choices.firstOrNull().orEmpty()
+    }
+    algorithm.id to store.getString("rex_vision_value_${algorithm.id}", default)
+  }
+
+  fun selectPreset(name: String) {
+    preset.set(name)
+    algorithms.set(app.infinity.mpvz.ui.player.RexVisionPolicy.preset(name))
+    values.getValue("lanczos").set(if (name == "Maximum Quality") "4" else "3")
+    values.getValue("debanding").set(if (name == "Maximum Quality") "16" else "12")
+    enabled.set(true)
+  }
+
+  fun snapshot(): Map<String, String> = values.mapValues { it.value.get() } + ("preset" to preset.get())
 }
