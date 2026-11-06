@@ -49,8 +49,8 @@ import app.infinity.mpvz.ui.player.RexVisionDiagnostics
 import app.infinity.mpvz.ui.player.RexVisionPolicy
 import app.infinity.mpvz.ui.player.controls.components.GlassSlider
 import app.infinity.mpvz.ui.preferences.components.ListPreference
-import app.infinity.mpvz.ui.preferences.components.SettingsScaffold
-import app.infinity.mpvz.ui.preferences.components.SettingsTopAppBar
+import app.infinity.mpvz.ui.preferences.components.SettingsScaffold as Scaffold
+import app.infinity.mpvz.ui.preferences.components.SettingsTopAppBar as TopAppBar
 import app.infinity.mpvz.ui.preferences.components.SwitchPreference
 import app.infinity.mpvz.ui.utils.LocalBackStack
 import app.infinity.mpvz.ui.utils.currentMpvConfigOverrideOptions
@@ -532,9 +532,9 @@ object DecoderInformationScreen : Screen {
 @Composable
 private fun RexScreen(title: String, content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit) {
   val backStack = LocalBackStack.current
-  SettingsScaffold(
+  Scaffold(
     topBar = {
-      SettingsTopAppBar(
+      TopAppBar(
         title = { Text(title) },
         navigationIcon = {
           TextButton(onClick = { backStack.popSafely() }) { Text("Back") }

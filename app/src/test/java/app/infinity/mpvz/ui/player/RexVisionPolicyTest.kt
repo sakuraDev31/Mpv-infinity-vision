@@ -3,7 +3,10 @@ package app.infinity.mpvz.ui.player
 
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
+@RunWith(RobolectricTestRunner::class)
 class RexVisionPolicyTest {
   @Test fun catalogContainsAll121DistinctTechniquesAndTiers() {
     assertEquals(121, RexVisionPolicy.TOTAL_ALGORITHM_COUNT)
