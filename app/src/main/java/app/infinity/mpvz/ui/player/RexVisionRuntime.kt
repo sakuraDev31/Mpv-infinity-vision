@@ -86,7 +86,7 @@ internal class RexVisionRuntime(context: Context, private val preferences: Decod
   fun stop() {
     applied.keys.toList().asReversed().forEach(::restore)
     val old = RexVisionDiagnostics.state.value
-    RexVisionDiagnostics.publish(old.copy(running = false, active = emptyList(), message = "MPV surface inactive; last observed device capabilities and source/output facts shown."))
+    RexVisionDiagnostics.publish(old.copy(running = false, active = emptyList(), message = if (applied.isEmpty()) "MPV surface inactive; last observed device capabilities and source/output facts shown." else "MPV surface inactive. Could not restore native options: ${applied.keys.joinToString()}. Restart playback before switching engines."))
   }
 
   fun tick() {
@@ -166,6 +166,7 @@ internal class RexVisionRuntime(context: Context, private val preferences: Decod
         }
       }
     }
+    (applied.keys - desired.keys).forEach { name -> errors += "Native option restoration pending: $name. Restart playback if this persists." }
     rejected.keys.forEach { id ->
       RexVisionPolicy.algorithms.first { it.id == id }.options.toList().asReversed().forEach(::restore)
     }

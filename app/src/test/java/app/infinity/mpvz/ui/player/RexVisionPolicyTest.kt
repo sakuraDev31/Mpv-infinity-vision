@@ -40,6 +40,16 @@ class RexVisionPolicyTest {
     assertTrue((RexVisionPolicy.selection(selected, "lanczos", false) intersect RexVisionPolicy.scalers).isEmpty())
   }
 
+  @Test fun sharedResamplingControlsMirrorOneOptionAndInterpolationDependencies() {
+    val interpolated = RexVisionPolicy.selection(RexVisionPolicy.defaults, "interpolation", true)
+    assertTrue(interpolated.containsAll(setOf("interpolation", "resampling", "display_sync")))
+    val stopped = RexVisionPolicy.selection(interpolated, "display_sync", false)
+    assertTrue(stopped.none { it in setOf("interpolation", "resampling", "display_sync") })
+    val resumed = RexVisionPolicy.selection(stopped, "resampling", true)
+    assertTrue(resumed.containsAll(setOf("resampling", "display_sync")))
+    assertFalse("interpolation" in resumed)
+  }
+
   @Test fun sourceCadenceAndColourRemainNeutralByDefault() {
     val plan = RexVisionPolicy.plan(RexVisionPolicy.defaults, emptyMap(), false)
     assertEquals("spline36", plan["scale"])

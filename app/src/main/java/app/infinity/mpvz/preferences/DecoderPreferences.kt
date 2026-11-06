@@ -133,6 +133,7 @@ internal class RexVisionPreferences(store: PreferenceStore) {
   }
 
   fun selectPreset(name: String) {
+    values.values.forEach { it.set(it.defaultValue()) }
     preset.set(name)
     algorithms.set(app.infinity.mpvz.ui.player.RexVisionPolicy.preset(name))
     values.getValue("lanczos").set(if (name == "Maximum Quality") "4" else "3")
