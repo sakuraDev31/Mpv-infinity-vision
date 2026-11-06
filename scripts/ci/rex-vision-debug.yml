@@ -1,0 +1,64 @@
+name: REX Vision debug APK
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'app/src/main/java/app/infinity/mpvz/ui/player/RexVision*.kt'
+      - 'app/src/main/java/app/infinity/mpvz/ui/player/MPVView.kt'
+      - 'app/src/main/java/app/infinity/mpvz/ui/preferences/RexVision*.kt'
+      - 'app/src/main/java/app/infinity/mpvz/ui/preferences/DecoderPreferencesScreen.kt'
+      - 'app/src/main/java/app/infinity/mpvz/preferences/DecoderPreferences.kt'
+      - 'app/src/test/java/app/infinity/mpvz/ui/player/RexVision*.kt'
+      - '.github/workflows/rex-vision-debug.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rex-debug-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install project Android toolchain
+        run: sdkmanager 'platforms;android-37' 'build-tools;36.0.0' 'ndk;27.3.13750724' 'cmake;3.22.1'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install native subtitle build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake libtool gettext autopoint gperf pkg-config nasm ninja-build
+      - name: Verify bundled LGPL MPV runtime
+        run: python3 scripts/verify-mpv-aar-lgpl.py app/libs/mpvlib.aar --abis arm64-v8a --only-selected-abis --require-vulkan
+      - name: Compile, test REX and build arm64 debug APK
+        # REX uses built-in MPV options. Reuse the checked-in verified AAR; no MPVFlow rebuild,
+        # model download, release keystore or secrets are needed for this debug build.
+        run: |
+          ./gradlew :app:testStandardDebugUnitTest --tests 'app.infinity.mpvz.ui.player.RexVision*' \
+            :app:assembleStandardDebug -PtargetAbi=arm64-v8a -PmpvFlowMpvBuild=false \
+            --build-cache --no-daemon --max-workers=2 --stacktrace
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: REX-Vision-arm64-debug
+          path: app/build/outputs/apk/standard/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: REX-Vision-test-results
+          path: |
+            app/build/test-results/testStandardDebugUnitTest/**
+            app/build/reports/tests/testStandardDebugUnitTest/**
+          if-no-files-found: ignore
