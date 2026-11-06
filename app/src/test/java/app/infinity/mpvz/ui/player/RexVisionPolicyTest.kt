@@ -46,8 +46,8 @@ class RexVisionPolicyTest {
     assertEquals("auto", plan["tone-mapping"])
     assertEquals("auto", plan["dither-depth"])
     assertNull(plan["target-trc"])
-    assertNull(plan["gamma"])
-    assertNull(plan["sharpen"])
+    assertEquals("0", plan["gamma"])
+    assertEquals("0", plan["sharpen"])
     assertNull(plan["tscale"])
   }
 
@@ -125,6 +125,22 @@ class RexVisionPolicyTest {
     assertTrue(budget.sample(3, false, false))
     repeat(29) { assertTrue(budget.sample(0, false, false)) }
     assertFalse(budget.sample(0, false, false))
+  }
+
+  @Test fun offSwitchesActuallyDisableTheManagedPasses() {
+    val plan = RexVisionPolicy.plan(setOf("gpu_shaders"), emptyMap(), false)
+    assertEquals("no", plan["hwdec"])
+    assertEquals("bilinear", plan["scale"])
+    assertEquals("no", plan["deband"])
+    assertEquals("no", plan["sigmoid-upscaling"])
+    assertEquals("no", plan["correct-downscaling"])
+    assertEquals("no", plan["dither-depth"])
+    assertEquals("clip", plan["tone-mapping"])
+  }
+
+  @Test fun correctDownscalingSelectsAConvolutionKernelRatherThanIneffectiveBilinear() {
+    assertEquals("spline36", RexVisionPolicy.plan(RexVisionPolicy.defaults, emptyMap(), false)["dscale"])
+    assertEquals("bilinear", RexVisionPolicy.plan(RexVisionPolicy.defaults, emptyMap(), true)["dscale"])
   }
 
   @Test fun thermalAndPauseSamplesDoNotOscillate() {

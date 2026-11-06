@@ -46,6 +46,7 @@ internal class RexVisionRuntime(context: Context, private val preferences: Decod
   private val baseline = linkedMapOf<String, String>()
   private val applied = linkedMapOf<String, String>()
   private val rejected = linkedMapOf<String, String>()
+  private val supportCache = mutableMapOf<String, Boolean>()
   private var rendererKey = ""
   private var budget = RexVisionBudget()
   private var previousDropped: Long? = null
@@ -53,7 +54,9 @@ internal class RexVisionRuntime(context: Context, private val preferences: Decod
 
   private fun read(name: String): String? = runCatching { PlaybackSession.getPropertyString(name) }.getOrNull()
   private fun option(name: String): String? = read("options/$name")
-  private fun supported(name: String): Boolean = read("option-info/$name/name") != null && option(name) != null
+  private fun supported(name: String): Boolean = supportCache.getOrPut(name) {
+    read("option-info/$name/name") != null && option(name) != null
+  }
   private fun owned(name: String) = MpvConfigOverridePolicy.isOwnedByMpvConf(name)
 
   private fun equivalent(actual: String?, value: String): Boolean = actual == value ||
@@ -93,6 +96,7 @@ internal class RexVisionRuntime(context: Context, private val preferences: Decod
     if (rendererKey != key) {
       applied.keys.toList().asReversed().forEach(::restore)
       rejected.clear()
+      supportCache.clear()
       rendererKey = key
     }
     val state = PlaybackSession.state.value
@@ -100,6 +104,7 @@ internal class RexVisionRuntime(context: Context, private val preferences: Decod
       previousDropped = null
       budget = RexVisionBudget()
       rejected.clear()
+      supportCache.clear()
       generation = state.generation
     }
     val gpu = vo == "gpu" || vo == "gpu-next"
@@ -112,9 +117,11 @@ internal class RexVisionRuntime(context: Context, private val preferences: Decod
       !state.surfaceAttached -> "No active MPV surface; start MPV playback to apply REX."
       else -> null
     }
+    val requested = preferences.rexVision.algorithms.get()
     val unavailable = RexVisionPolicy.algorithms.mapNotNull { a ->
       val reason = a.unavailable ?: external ?: when {
         a.id == "sharpening" && vo != "gpu" -> "MPV --sharpen is implemented only by vo=gpu, not gpu-next."
+        a.id == "deringing" && requested.none { it in RexVisionPolicy.scalers } -> "Select a convolution scaler first; anti-ringing has no effect on bilinear scaling."
         a.id == "hardware_decoding" && mediaCodecs.isEmpty() -> "No platform MediaCodec candidates found. Software decoding remains available."
         a.options.any(::owned) -> "Owned by mpv.conf; change option ownership first."
         a.options.any { !supported(it) } -> "Required native option unavailable on this MPV build/backend."
@@ -129,10 +136,11 @@ internal class RexVisionRuntime(context: Context, private val preferences: Decod
     val hot = (Build.VERSION.SDK_INT >= 29 && (power?.currentThermalStatus ?: 0) >= PowerManager.THERMAL_STATUS_MODERATE) || power?.isPowerSaveMode == true
     val severe = Build.VERSION.SDK_INT >= 29 && (power?.currentThermalStatus ?: 0) >= PowerManager.THERMAL_STATUS_SEVERE
     val constrained = severe || (preferences.rexVision.adaptive.get() && budget.sample(delta, hot, state.paused))
-    val requested = preferences.rexVision.algorithms.get()
     val enabled = requested - unavailable.keys
     val desired = if (preferences.rexVision.enabled.get() && external == null) {
-      RexVisionPolicy.plan(enabled, preferences.rexVision.snapshot(), constrained).filterKeys { !owned(it) && supported(it) }
+      RexVisionPolicy.plan(enabled, preferences.rexVision.snapshot(), constrained).filterKeys { name ->
+        !owned(name) && supported(name) && RexVisionPolicy.algorithms.any { name in it.options && it.id !in unavailable }
+      }
     } else emptyMap()
     val errors = mutableListOf<String>()
     // Remove stages no longer requested, without disturbing unrelated MPV/Anime4K/HDR options.
@@ -165,22 +173,25 @@ internal class RexVisionRuntime(context: Context, private val preferences: Decod
       a.id in enabled && a.id !in unavailable && (a.id == "gpu_shaders" || a.options.all { applied[it] != null }) &&
         !(constrained && a.id in setOf("interpolation", "debanding", "sigmoid", "sharpening"))
     }.map { it.title } else emptyList()
-    val transfer = read("video-params/gamma")
+    val transfer = read("video-dec-params/gamma")
     val hdr = when (transfer) { "pq", "hlg", "smpte-st-2084", "arib-std-b67" -> "HDR"; null -> "Unavailable"; else -> "SDR" }
     fun facts(vararg fields: Pair<String, String>): Map<String, String> = fields.associate { (label, prop) -> label to (read(prop) ?: "Unavailable") }
     val source = facts(
-      "Video codec" to "video-codec", "Source width" to "video-params/w", "Source height" to "video-params/h",
-      "Source FPS (container)" to "container-fps", "Estimated source FPS" to "estimated-vf-fps",
-      "Video bitrate (bit/s, if reported)" to "video-bitrate", "Colour primaries" to "video-params/primaries",
-      "Transfer characteristics" to "video-params/gamma", "Matrix" to "video-params/colormatrix", "Range" to "video-params/colorlevels",
+      "Video codec" to "current-tracks/video/codec", "Source width" to "video-dec-params/w", "Source height" to "video-dec-params/h",
+      "Source FPS (container)" to "container-fps",
+      "Video bitrate (bit/s, if reported)" to "video-bitrate", "Colour primaries" to "video-dec-params/primaries",
+      "Transfer characteristics" to "video-dec-params/gamma", "Matrix" to "video-dec-params/colormatrix", "Range" to "video-dec-params/colorlevels",
     ) + ("HDR/SDR" to hdr)
     val hwdec = read("hwdec-current")
     val output = facts(
-      "MPV version" to "mpv-version", "Decoder implementation" to "video-dec-params/decoder",
+      "MPV version" to "mpv-version", "Decoder implementation" to "current-tracks/video/decoder-desc",
       "Active hardware decoder / copy mode" to "hwdec-current", "Rendering backend" to "current-vo",
       "GPU API (requested)" to "options/gpu-api", "GPU context (requested)" to "options/gpu-context",
-      "GPU renderer (if exposed)" to "gpu-context/renderer", "Output width" to "video-out-params/w", "Output height" to "video-out-params/h",
-      "Output primaries" to "video-out-params/primaries", "Output transfer" to "video-out-params/gamma",
+      "GPU renderer (if exposed)" to "gpu-context/renderer", "Active GPU context" to "current-gpu-context",
+      "Render surface width" to "osd-dimensions/w", "Render surface height" to "osd-dimensions/h",
+      "Post-filter frame width (before VO scaling)" to "video-out-params/w", "Post-filter frame height (before VO scaling)" to "video-out-params/h",
+      "VO target primaries (if exposed)" to "video-target-params/primaries", "VO target transfer (if exposed)" to "video-target-params/gamma",
+      "Estimated post-filter FPS (not presentation FPS)" to "estimated-vf-fps",
       "Display refresh Hz (not source FPS)" to "display-fps", "Estimated display Hz" to "estimated-display-fps",
       "Measured presentation FPS (if reported)" to "output-fps", "Active video synchronisation" to "video-sync-active",
       "Dropped output frames" to "frame-drop-count", "Decoder dropped frames" to "decoder-frame-drop-count",
@@ -192,7 +203,7 @@ internal class RexVisionRuntime(context: Context, private val preferences: Decod
       "MediaCodec candidates (not proof of codec/profile support)" to mediaCodecs.joinToString().ifEmpty { "None reported" },
       "Adaptive quality" to if (constrained) "Reduced: thermal/power-save or sustained frame drops" else "Requested quality",
       "Processing load" to "No portable GPU utilization counter; frame drops, thermal state and available pass timings are used.",
-      "Active REX stages" to active.joinToString().ifEmpty { "None" },
+      "Enabled REX stages (verified options; content-dependent)" to active.joinToString().ifEmpty { "None" },
       "Native filter chain" to (read("vf") ?: "Unavailable"),
       "External shader chain" to (read("glsl-shaders") ?: "Unavailable"),
       "Native REX options" to applied.entries.joinToString { "${it.key}=${it.value}" }.ifEmpty { "None" },
@@ -201,7 +212,7 @@ internal class RexVisionRuntime(context: Context, private val preferences: Decod
     RexVisionDiagnostics.publish(RexVisionSnapshot(
       running = state.surfaceAttached, probed = true, unavailable = unavailable, active = active, source = source, output = output,
       errors = errors + rejected.values.distinct(),
-      message = external ?: if (!preferences.rexVision.enabled.get()) "REX disabled; existing playback settings are unchanged. Toggle on to apply." else if (constrained) "Adaptive fallback active; source timing and audio sync preserved." else "Native MPV processing. Disabled stages restore the pre-REX player setting. No forced output FPS.",
+      message = external ?: if (!preferences.rexVision.enabled.get()) "REX disabled; existing playback settings are unchanged. Toggle on to apply." else if (constrained) "Adaptive fallback active; source timing and audio sync preserved." else "Native MPV processing. REX switches control the native passes; master-off restores prior player settings. No forced output FPS.",
     ))
   }
 }

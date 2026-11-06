@@ -132,7 +132,7 @@ object DecoderPreferencesScreen : Screen {
         TopAppBar(
           title = {
             Text(
-              text = "Decoder & Video Enhancement",
+              text = stringResource(R.string.pref_decoder),
               style = MaterialTheme.typography.headlineSmall,
               fontWeight = FontWeight.ExtraBold,
               color = MaterialTheme.colorScheme.primary,

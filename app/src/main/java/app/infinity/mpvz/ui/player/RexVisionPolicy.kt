@@ -22,7 +22,7 @@ internal object RexVisionPolicy {
     RexAlgorithm("spline36", "Spline36 Scaling", "Image Scaling & Reconstruction", "Six-tap spline reconstruction with restrained ringing. Select one scaler.", "Medium", setOf("scale")),
     RexAlgorithm("mitchell", "Mitchell-Netravali Scaling", "Image Scaling & Reconstruction", "Soft bicubic reconstruction that avoids aggressive sharpening. Select one scaler.", "Low", setOf("scale")),
     RexAlgorithm("sigmoid", "Sigmoid Upscaling", "Image Scaling & Reconstruction", "Sigmoidal light domain reduces scaling halos; only used during upscaling.", "Medium", setOf("sigmoid-upscaling")),
-    RexAlgorithm("correct_downscaling", "Correct Downscaling", "Image Scaling & Reconstruction", "Linear-light downscaling with antialiased filter support.", "Medium", setOf("linear-downscaling", "correct-downscaling")),
+    RexAlgorithm("correct_downscaling", "Correct Downscaling", "Image Scaling & Reconstruction", "Linear-light downscaling with antialiased filter support.", "Medium", setOf("dscale", "linear-downscaling", "correct-downscaling")),
     RexAlgorithm("debanding", "Debanding", "Compression & Image Restoration", "GPU gradient smoothing; low thresholds preserve texture. Strength is MPV's threshold.", "Medium", setOf("deband", "deband-threshold", "deband-iterations", "deband-grain"), range = 4..48),
     RexAlgorithm("deringing", "Deringing", "Compression & Image Restoration", "Scaler anti-ringing clamp, not restoration of ringing baked into the source.", "Low", setOf("scale-antiring"), range = 0..100),
     RexAlgorithm("deblocking", "Deblocking", "Compression & Image Restoration", "Remove block-boundary compression artefacts.", "High", unavailable = "No independent zero-copy deblocking stage is integrated. Codec in-loop deblocking remains decoder-controlled."),
@@ -37,10 +37,10 @@ internal object RexVisionPolicy {
     RexAlgorithm("tone_mapping", "Tone Mapping", "Lighting, Colour & HDR", "Native HDR luminance mapping. Auto follows MPV; never promotes SDR to artificial HDR.", "Medium", setOf("tone-mapping"), listOf("auto", "bt.2390", "hable", "reinhard", "clip")),
     RexAlgorithm("hdr_sdr", "HDR-to-SDR Conversion", "Lighting, Colour & HDR", "Explicit SDR output target; native renderer maps HDR through the same tone-mapping pass, not a second conversion.", "Medium", setOf("target-trc", "target-prim")),
     RexAlgorithm("gamma", "Gamma Correction", "Lighting, Colour & HDR", "Small native gamma adjustment. Zero is neutral; disabled restores the existing player setting.", "Low", setOf("gamma"), range = -20..20),
-    RexAlgorithm("colour_management", "Colour Management", "Lighting, Colour & HDR", "Native output-primary conversion. Auto uses the renderer's target; not a claim of calibrated Android ICC support.", "Low", setOf("target-prim"), listOf("auto", "bt.709", "bt.2020")),
+    RexAlgorithm("colour_management", "Colour Management", "Lighting, Colour & HDR", "Native output-primary conversion. When off, the existing target is restored. Auto uses the renderer's target; not calibrated Android ICC support.", "Low", setOf("target-prim"), listOf("auto", "bt.709", "bt.2020")),
     RexAlgorithm("dithering", "Dithering", "Lighting, Colour & HDR", "Dither after colour conversion at the output bit depth. Auto lets MPV detect output depth.", "Low", setOf("dither-depth"), listOf("auto", "8", "10")),
     RexAlgorithm("gpu_shaders", "GPU Shader Processing", "GPU & Playback Processing", "Allow REX native GPU stages. No new CPU frame copies or custom shader chain. Does not disable the renderer or external shaders.", "Medium"),
-    RexAlgorithm("hardware_decoding", "Hardware Video Decoding (MediaCodec)", "GPU & Playback Processing", "Request MediaCodec with software fallback. Actual decoder and copy mode are reported below; zero-copy is not guaranteed.", "Low", setOf("hwdec")),
+    RexAlgorithm("hardware_decoding", "Hardware Video Decoding (MediaCodec)", "GPU & Playback Processing", "On requests MediaCodec with software fallback; off requests software decoding while REX is active. Actual copy mode is reported below; zero-copy is not guaranteed.", "Low", setOf("hwdec")),
     RexAlgorithm("display_sync", "Display-Resample Synchronisation", "GPU & Playback Processing", "The same native video-sync option as Display Resampling. Audio remains synchronized; this does not force 48 or 60 FPS.", "Low", setOf("video-sync")),
   )
 
@@ -56,19 +56,28 @@ internal object RexVisionPolicy {
     else -> defaults
   }
 
-  /** Only enabled stages own options. Disabling restores the pre-REX value, not guessed defaults. */
+  /** Master-on owns the native switches. Master-off restores the pre-REX player settings. */
   fun plan(enabled: Set<String>, values: Map<String, String>, constrained: Boolean): Map<String, String> = buildMap {
-    if ("hardware_decoding" in enabled) put("hwdec", "mediacodec,auto")
+    put("hwdec", if ("hardware_decoding" in enabled) "mediacodec,auto" else "no")
     if ("gpu_shaders" !in enabled) return@buildMap
     fun intensity(id: String, fallback: Int, range: IntRange): Int =
       (values[id]?.toIntOrNull() ?: fallback).coerceIn(range)
     fun choice(id: String, fallback: String): String =
       values[id]?.takeIf { it in algorithms.first { a -> a.id == id }.choices } ?: fallback
     val scaler = listOf("lanczos", "spline36", "mitchell").firstOrNull { it in enabled }
-    if (scaler != null) put("scale", if (constrained) "bilinear" else scaler)
+    put("scale", if (constrained) "bilinear" else scaler ?: "bilinear")
+    put("sigmoid-upscaling", "no")
+    put("linear-downscaling", "no")
+    put("correct-downscaling", "no")
+    put("deband", "no")
+    put("sharpen", "0")
+    put("gamma", "0")
+    put("tone-mapping", "clip")
+    put("dither-depth", "no")
     if (scaler == "lanczos" && !constrained) put("scale-radius", intensity("lanczos", 3, 2..4).toString())
     if ("sigmoid" in enabled) put("sigmoid-upscaling", if (constrained) "no" else "yes")
     if ("correct_downscaling" in enabled) {
+      put("dscale", if (constrained) "bilinear" else scaler ?: "spline36")
       put("linear-downscaling", if (constrained) "no" else "yes")
       put("correct-downscaling", "yes")
     }
