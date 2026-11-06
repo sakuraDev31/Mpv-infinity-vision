@@ -11,12 +11,12 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class RexVisionPolicyTest {
-  @Test fun catalogContainsAll121DistinctTechniquesAndTiers() {
+  @Test fun catalogContainsAll122DistinctTechniquesAndTiers() {
     assertEquals(122, RexVisionPolicy.TOTAL_ALGORITHM_COUNT)
     assertEquals(122, RexVisionPolicy.algorithms.size)
     assertEquals(122, RexVisionPolicy.algorithms.map { it.id }.distinct().size)
     assertEquals((1..122).toList(), RexVisionPolicy.algorithms.map { it.index })
-    assertEquals(121, RexVisionPolicy.algorithms.map { it.title }.distinct().size)
+    assertEquals(122, RexVisionPolicy.algorithms.map { it.title }.distinct().size)
     assertTrue(RexVisionPolicy.algorithms.all { it.description.isNotBlank() && it.impact in setOf("Low", "Medium", "High") })
     // Verify all 3 implementation tiers are represented
     val tiers = RexVisionPolicy.algorithms.map { it.tier }.toSet()
@@ -39,7 +39,7 @@ class RexVisionPolicyTest {
     assertEquals(setOf("highlight-control"), algorithm("highlight_bloom_control").shaderPasses)
     assertEquals(setOf("compression-cleanup"), algorithm("mosquito_noise_reduction").shaderPasses)
     assertTrue(algorithm("deblocking").unavailable!!.contains("block-grid"))
-    assertTrue(algorithm("temporal_edge_stability").unavailable!!.contains("frame-history"))
+    assertTrue(algorithm("temporal_edge_stability").unavailable!!.contains("frame history"))
     assertTrue(algorithm("shot_boundary_detection").unavailable!!.contains("frame-history"))
   }
 
