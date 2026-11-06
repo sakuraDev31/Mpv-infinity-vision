@@ -45,7 +45,7 @@ import kotlin.math.roundToInt
 @Serializable
 object RexVisionPreferencesScreen : Screen {
   @Composable
-  override fun Content() = RexScreen("REX Vision") {
+  override fun Content() {
     val decoder = koinInject<DecoderPreferences>()
     val preferences = decoder.rexVision
     val enabled by preferences.enabled.collectAsState()
@@ -55,6 +55,7 @@ object RexVisionPreferencesScreen : Screen {
     val diagnostics by RexVisionDiagnostics.state.collectAsState()
     val configOwned = currentMpvConfigOverrideOptions()
     val backStack = LocalBackStack.current
+    RexScreen("REX Vision") {
     item {
       PreferenceCard {
         Text("Advanced Video Enhancement Engine", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(16.dp))
@@ -97,6 +98,7 @@ object RexVisionPreferencesScreen : Screen {
     item {
       Text("Unsupported techniques are intentionally disabled, not simulated with sharpening or fake switches. An enabled request is not proof a pass ran: consult active native options and pipeline diagnostics. Native renderer defaults may already include some operations.", modifier = Modifier.padding(16.dp))
     }
+    }
   }
 }
 
@@ -133,8 +135,9 @@ private fun RexAlgorithmControl(algorithm: RexAlgorithm, selected: Boolean, edit
 @Serializable
 object DecoderInformationScreen : Screen {
   @Composable
-  override fun Content() = RexScreen("Decoder Information") {
+  override fun Content() {
     val snapshot by RexVisionDiagnostics.state.collectAsState()
+    RexScreen("Decoder Information") {
     item { Text(snapshot.message, modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.primary) }
     item { Text(if (snapshot.running) "Live MPV snapshot · refreshed every 2 seconds" else "Inactive · last MPV snapshot, not current Native Media3 output", modifier = Modifier.padding(16.dp)) }
     listOf("Source information (before output processing)" to snapshot.source, "Playback output & processing" to snapshot.output).forEach { (title, facts) ->
@@ -152,6 +155,7 @@ object DecoderInformationScreen : Screen {
           }
         }
       }
+    }
     }
   }
 }

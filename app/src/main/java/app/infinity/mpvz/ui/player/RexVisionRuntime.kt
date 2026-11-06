@@ -40,7 +40,7 @@ internal object RexVisionDiagnostics {
 internal class RexVisionRuntime(context: Context, private val preferences: DecoderPreferences) {
   private val power = context.applicationContext.getSystemService(PowerManager::class.java)
   private val mediaCodecs = runCatching {
-    MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter { !it.isEncoder }.map { it.name }
+    MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter { !it.isEncoder && it.supportedTypes.any { mime -> mime.startsWith("video/") } }.map { it.name }
       .filterNot { name -> name.startsWith("OMX.google.") || name.startsWith("c2.android.") }
   }.getOrDefault(emptyList())
   private val baseline = linkedMapOf<String, String>()
@@ -56,12 +56,15 @@ internal class RexVisionRuntime(context: Context, private val preferences: Decod
   private fun supported(name: String): Boolean = read("option-info/$name/name") != null && option(name) != null
   private fun owned(name: String) = MpvConfigOverridePolicy.isOwnedByMpvConf(name)
 
+  private fun equivalent(actual: String?, value: String): Boolean = actual == value ||
+    (actual?.toDoubleOrNull() != null && actual.toDoubleOrNull() == value.toDoubleOrNull())
+
   private fun write(name: String, value: String): Boolean {
     if (owned(name)) return false
     return runCatching {
       PlaybackSession.setPropertyString("options/$name", value)
       val actual = option(name)
-      actual == value || (actual?.toDoubleOrNull() != null && actual.toDoubleOrNull() == value.toDoubleOrNull())
+      equivalent(actual, value)
     }.getOrDefault(false)
   }
 
@@ -124,7 +127,8 @@ internal class RexVisionRuntime(context: Context, private val preferences: Decod
     val delta = if (drops != null && previousDropped != null) (drops - previousDropped!!).coerceAtLeast(0) else 0
     previousDropped = drops
     val hot = (Build.VERSION.SDK_INT >= 29 && (power?.currentThermalStatus ?: 0) >= PowerManager.THERMAL_STATUS_MODERATE) || power?.isPowerSaveMode == true
-    val constrained = preferences.rexVision.adaptive.get() && budget.sample(delta, hot, state.paused)
+    val severe = Build.VERSION.SDK_INT >= 29 && (power?.currentThermalStatus ?: 0) >= PowerManager.THERMAL_STATUS_SEVERE
+    val constrained = severe || (preferences.rexVision.adaptive.get() && budget.sample(delta, hot, state.paused))
     val requested = preferences.rexVision.algorithms.get()
     val enabled = requested - unavailable.keys
     val desired = if (preferences.rexVision.enabled.get() && external == null) {
@@ -134,7 +138,8 @@ internal class RexVisionRuntime(context: Context, private val preferences: Decod
     // Remove stages no longer requested, without disturbing unrelated MPV/Anime4K/HDR options.
     (applied.keys - desired.keys).toList().asReversed().forEach(::restore)
     for ((name, value) in desired) {
-      if (applied[name] == value && option(name) == value) continue
+      if (applied[name] != null && equivalent(applied[name], value) && equivalent(option(name), value)) continue
+      if (RexVisionPolicy.algorithms.any { name in it.options && it.id in rejected }) continue
       if (name !in baseline) option(name)?.let { baseline[name] = it }
       if (name !in baseline) continue
       if (write(name, value)) {
@@ -152,6 +157,9 @@ internal class RexVisionRuntime(context: Context, private val preferences: Decod
           a.options.toList().asReversed().forEach(::restore)
         }
       }
+    }
+    rejected.keys.forEach { id ->
+      RexVisionPolicy.algorithms.first { it.id == id }.options.toList().asReversed().forEach(::restore)
     }
     val active = if (preferences.rexVision.enabled.get() && external == null) RexVisionPolicy.algorithms.filter { a ->
       a.id in enabled && a.id !in unavailable && (a.id == "gpu_shaders" || a.options.all { applied[it] != null }) &&
