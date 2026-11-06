@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
 package app.infinity.mpvz.ui.player
 
+import android.app.Application
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -8,7 +9,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35])
+@Config(application = Application::class, sdk = [35])
 class RexVisionPolicyTest {
   @Test fun catalogContainsAll121DistinctTechniquesAndTiers() {
     assertEquals(121, RexVisionPolicy.TOTAL_ALGORITHM_COUNT)
