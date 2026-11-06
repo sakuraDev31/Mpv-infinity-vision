@@ -23,7 +23,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -48,6 +47,7 @@ import app.infinity.mpvz.ui.player.RexImplementationTier
 import app.infinity.mpvz.ui.player.RexVisionDiagnostics
 import app.infinity.mpvz.ui.player.RexVisionPolicy
 import app.infinity.mpvz.ui.player.controls.components.GlassSlider
+import app.infinity.mpvz.ui.player.controls.components.GlassSwitch
 import app.infinity.mpvz.ui.preferences.components.ListPreference
 import app.infinity.mpvz.ui.preferences.components.SettingsScaffold as Scaffold
 import app.infinity.mpvz.ui.preferences.components.SettingsTopAppBar as TopAppBar
@@ -241,7 +241,7 @@ internal fun RexJsonConfigurationCard(modifier: Modifier = Modifier) {
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
           }
-          Switch(
+          GlassSwitch(
             checked = bypassOriginal,
             onCheckedChange = { preferences.bypassToOriginal.set(it) },
           )
