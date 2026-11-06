@@ -351,4 +351,96 @@ jobs:
               exit 1
             fi
             echo "Verified Flow runtime libraries and confirmed librife_vfi.so is absent: $apk"
-      
+      - name: Verify Native DTS FFmpeg audio fallback is packaged
+        if: ${{ (inputs.flavor == 'standard' || inputs.flavor == 'no_vulkan') && (inputs.target_abi == 'arm64-v8a' || inputs.target_abi == 'all') }}
+        run: |
+          set -euo pipefail
+          case "${{ inputs.flavor }}" in
+            standard) gradle_flavor=standard ;;
+            no_vulkan) gradle_flavor=noVulkan ;;
+            *) echo "Unsupported flavor: ${{ inputs.flavor }}" >&2; exit 1 ;;
+          esac
+          apk_dir="app/build/outputs/apk/$gradle_flavor/debug"
+          [[ -d "$apk_dir" ]] || { echo "No APK output directory: $apk_dir" >&2; exit 1; }
+
+          verified=0
+          while IFS= read -r -d '' candidate; do
+            candidate_entries="$(unzip -Z1 "$candidate")"
+            if ! grep -q '^lib/arm64-v8a/' <<< "$candidate_entries"; then
+              continue
+            fi
+            if ! grep -Fxq 'lib/arm64-v8a/libffmpegJNI.so' <<< "$candidate_entries"; then
+              echo "arm64 APK lacks lib/arm64-v8a/libffmpegJNI.so: $candidate" >&2
+              exit 1
+            fi
+            echo "Verifying arm64 Media3 FFmpeg fallback in $candidate"
+            python3 scripts/verify-media3-dca-apk.py "$candidate"
+            verified=$((verified + 1))
+          done < <(find "$apk_dir" -type f -name '*.apk' -print0)
+
+          (( verified > 0 )) || { echo "No APK with arm64 Media3 FFmpeg fallback found under $apk_dir" >&2; exit 1; }
+          # Native (Media3) plays DTS / DTS Express / DTS-HD through libffmpegJNI.so, which must
+          # link the packaged LGPL FFmpeg and find its DCA decoder. Same gate as the MPVFlow build.
+      - name: Verify native library symbol hygiene
+        if: ${{ inputs.flavor == 'standard' && inputs.target_abi == 'arm64-v8a' }}
+        run: |
+          set -euo pipefail
+          apk="$(find app/build/outputs/apk/standard/debug -type f -name '*arm64-v8a*.apk' -print -quit)"
+          [[ -n "$apk" ]] || { echo "No Standard arm64 debug APK found" >&2; exit 1; }
+          audit_dir="$(mktemp -d)"
+          trap 'rm -rf "$audit_dir"' EXIT
+          for library in libmpv.so libmedia3flow_vulkan.so; do
+            native="$audit_dir/$library"
+            unzip -p "$apk" "lib/arm64-v8a/$library" > "$native"
+            [[ -s "$native" ]] || { echo "APK contains an empty/missing $library" >&2; exit 1; }
+            if readelf -W -S "$native" | grep -Eq '\.(symtab|debug_|gnu_debugdata)'; then
+              echo "$library contains local/debug symbol metadata after stripping" >&2
+              readelf -W -S "$native" | grep -E '\.(symtab|debug_|gnu_debugdata)' >&2 || true
+              exit 1
+            fi
+            exports="$(nm -D --defined-only "$native" | awk '{print $NF}')"
+            if grep -Eq '^(mpvflow_|.*MPVFlow)' <<<"$exports"; then
+              echo "$library exposes internal MPVFlow dynamic symbols:" >&2
+              grep -E '^(mpvflow_|.*MPVFlow)' <<<"$exports" >&2
+              exit 1
+            fi
+            if [[ "$library" == libmedia3flow_vulkan.so ]] && ! grep -q '^Java_' <<<"$exports"; then
+              echo "Media3 Flow JNI entrypoints are missing from $library" >&2
+              exit 1
+            fi
+            echo "Verified $library: JNI/API exports retained; Flow internals and debug symbols hidden"
+          done
+      - name: Verify APK package, ABI, integrity and signing identity
+        if: ${{ inputs.flavor == 'standard' && inputs.target_abi == 'arm64-v8a' }}
+        run: |
+          set -euo pipefail
+          apk="$(find app/build/outputs/apk/standard/debug -type f -name '*arm64-v8a*.apk' -print -quit)"
+          [[ -n "$apk" ]]
+          python3 scripts/verify-debug-apk-artifact.py "$apk" "${apk%.apk}.verification.json"
+      - name: Wait for fail-fast compile and full unit tests before publishing APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The APK job runs in parallel with the test job; never publish an APK whose tests did not pass.
+          deadline=$((SECONDS + 3600))
+          while :; do
+            state="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs" \
+              --jq '.jobs[] | select(.name == "Kotlin compile and full unit tests") | "\(.status) \(.conclusion)"')"
+            echo "Kotlin compile and full unit tests: ${state:-not visible yet}"
+            case "$state" in
+              "completed success") break ;;
+              completed*) echo "Unit-test job did not pass; the APK is not published." >&2; exit 1 ;;
+            esac
+            (( SECONDS < deadline )) || { echo "Timed out waiting for unit tests" >&2; exit 1; }
+            sleep 15
+          done
+      - name: Upload debug APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpv-infinity-${{ inputs.flavor }}-debug
+          path: |
+            app/build/outputs/apk/**/*.apk
+            app/build/outputs/apk/**/*.verification.json
+          if-no-files-found: error
+          
