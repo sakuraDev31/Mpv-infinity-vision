@@ -12,10 +12,10 @@ import org.robolectric.annotation.Config
 @Config(application = Application::class, sdk = [35])
 class RexVisionPolicyTest {
   @Test fun catalogContainsAll121DistinctTechniquesAndTiers() {
-    assertEquals(121, RexVisionPolicy.TOTAL_ALGORITHM_COUNT)
-    assertEquals(121, RexVisionPolicy.algorithms.size)
-    assertEquals(121, RexVisionPolicy.algorithms.map { it.id }.distinct().size)
-    assertEquals((1..121).toList(), RexVisionPolicy.algorithms.map { it.index })
+    assertEquals(122, RexVisionPolicy.TOTAL_ALGORITHM_COUNT)
+    assertEquals(122, RexVisionPolicy.algorithms.size)
+    assertEquals(122, RexVisionPolicy.algorithms.map { it.id }.distinct().size)
+    assertEquals((1..122).toList(), RexVisionPolicy.algorithms.map { it.index })
     assertEquals(121, RexVisionPolicy.algorithms.map { it.title }.distinct().size)
     assertTrue(RexVisionPolicy.algorithms.all { it.description.isNotBlank() && it.impact in setOf("Low", "Medium", "High") })
     // Verify all 3 implementation tiers are represented
@@ -25,9 +25,22 @@ class RexVisionPolicyTest {
 
   @Test fun everyControlHasNativeBindingsOrAnHonestUnsupportedReason() {
     RexVisionPolicy.algorithms.forEach {
-      assertTrue(it.title, it.options.isNotEmpty() || it.id == "gpu_shaders" || !it.unavailable.isNullOrBlank())
+      assertTrue(it.title, it.options.isNotEmpty() || it.shaderPasses.isNotEmpty() || it.id == "gpu_shaders" || !it.unavailable.isNullOrBlank())
       if (it.unavailable != null) assertTrue(it.title, it.options.isEmpty())
     }
+  }
+
+  @Test fun spatialShaderStagesAreExplicitAndTemporalStagesRemainUnavailable() {
+    fun algorithm(id: String) = RexVisionPolicy.algorithms.first { it.id == id }
+    assertEquals(setOf("edge-sharpen"), algorithm("edge_aware_enhancement").shaderPasses)
+    assertEquals(setOf("edge-sharpen"), algorithm("adaptive_local_sharpening").shaderPasses)
+    assertEquals(setOf("texture-denoise"), algorithm("texture_aware_denoising").shaderPasses)
+    assertEquals(setOf("local-tone"), algorithm("local_tone_mapping").shaderPasses)
+    assertEquals(setOf("highlight-control"), algorithm("highlight_bloom_control").shaderPasses)
+    assertEquals(setOf("compression-cleanup"), algorithm("mosquito_noise_reduction").shaderPasses)
+    assertTrue(algorithm("deblocking").unavailable!!.contains("block-grid"))
+    assertTrue(algorithm("temporal_edge_stability").unavailable!!.contains("frame-history"))
+    assertTrue(algorithm("shot_boundary_detection").unavailable!!.contains("frame-history"))
   }
 
   @Test fun presetsNeverEnableInterpolationOrInventMotionProcessing() {

@@ -39,6 +39,7 @@ internal object RexVisionDiagnostics {
  */
 internal class RexVisionRuntime(context: Context, private val preferences: DecoderPreferences) {
   private val power = context.applicationContext.getSystemService(PowerManager::class.java)
+  private val shaderManager = RexVisionShaderManager(context, PlaybackSessionShaderRuntime)
   private val mediaCodecs = runCatching {
     MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter { !it.isEncoder && it.supportedTypes.any { mime -> mime.startsWith("video/") } }.map { it.name }
       .filterNot { name -> name.startsWith("OMX.google.") || name.startsWith("c2.android.") }
@@ -84,6 +85,7 @@ internal class RexVisionRuntime(context: Context, private val preferences: Decod
   }
 
   fun stop() {
+    shaderManager.clear()
     applied.keys.toList().asReversed().forEach(::restore)
     val old = RexVisionDiagnostics.state.value
     RexVisionDiagnostics.publish(old.copy(running = false, active = emptyList(), message = if (applied.isEmpty()) "MPV surface inactive; last observed device capabilities and source/output facts shown." else "MPV surface inactive. Could not restore native options: ${applied.keys.joinToString()}. Restart playback before switching engines."))
@@ -138,6 +140,11 @@ internal class RexVisionRuntime(context: Context, private val preferences: Decod
     val constrained = severe || (preferences.rexVision.adaptive.get() && budget.sample(delta, hot, state.paused))
     val bypassOriginal = preferences.rexVision.bypassToOriginal.get()
     val enabled = requested - unavailable.keys
+    val transfer = read("video-dec-params/gamma")?.lowercase().orEmpty()
+    val hdrSource = transfer in setOf("pq", "hlg", "smpte-st-2084", "arib-std-b67")
+    val shaderIds = enabled.filter { id -> RexVisionPolicy.algorithms.firstOrNull { it.id == id }?.shaderPasses?.isNotEmpty() == true }.toSet()
+    val shaderResult = if (preferences.rexVision.enabled.get() && !bypassOriginal && external == null && "gpu_shaders" in enabled) shaderManager.apply(shaderIds, hdrSource) else { shaderManager.clear(); RexShaderApplyResult(emptySet(), emptyMap(), emptySet()) }
+    shaderResult.unavailable.forEach { (id, reason) -> unavailable[id] = reason }
     val desired = if (preferences.rexVision.enabled.get() && !bypassOriginal && external == null) {
       RexVisionPolicy.plan(enabled, preferences.rexVision.snapshot(), constrained).filterKeys { name ->
         !owned(name) && supported(name) && RexVisionPolicy.algorithms.any { name in it.options && it.id !in unavailable }
@@ -172,11 +179,14 @@ internal class RexVisionRuntime(context: Context, private val preferences: Decod
       RexVisionPolicy.algorithms.first { it.id == id }.options.toList().asReversed().forEach(::restore)
     }
     val active = if (preferences.rexVision.enabled.get() && !bypassOriginal && external == null) RexVisionPolicy.algorithms.filter { a ->
-      a.id in enabled && a.id !in unavailable && (a.id == "gpu_shaders" || a.options.all { applied[it] != null }) &&
+      a.id in enabled && a.id !in unavailable && (
+        a.id == "gpu_shaders" ||
+          (a.options.isNotEmpty() && a.options.all { applied[it] != null }) ||
+          (a.shaderPasses.isNotEmpty() && a.id in shaderResult.activeAlgorithms)
+      ) &&
         !(constrained && a.id in setOf("interpolation", "debanding", "sigmoid", "sharpening"))
     }.map { it.title } else emptyList()
-    val transfer = read("video-dec-params/gamma")
-    val hdr = when (transfer) { "pq", "hlg", "smpte-st-2084", "arib-std-b67" -> "HDR"; null -> "Unavailable"; else -> "SDR" }
+    val hdr = when { transfer.isEmpty() -> "Unavailable"; hdrSource -> "HDR"; else -> "SDR" }
     fun facts(vararg fields: Pair<String, String>): Map<String, String> = fields.associate { (label, prop) -> label to (read(prop) ?: "Unavailable") }
     val source = facts(
       "Video codec" to "current-tracks/video/codec", "Source width" to "video-dec-params/w", "Source height" to "video-dec-params/h",
@@ -210,7 +220,8 @@ internal class RexVisionRuntime(context: Context, private val preferences: Decod
       "Native filter chain" to (read("vf") ?: "Unavailable"),
       "External shader chain" to (read("glsl-shaders") ?: "Unavailable"),
       "Native REX options" to applied.entries.joinToString { "${it.key}=${it.value}" }.ifEmpty { "None" },
-      "Pipeline" to "Decode/import → native deband → scaling/anti-ringing → gpu-only sharpen → colour/tone map → dither → MPV timed display. Temporal blending uses the VO queue; exact shader fusion is renderer-owned.",
+      "REX GLSL passes" to shaderResult.activePasses.joinToString().ifEmpty { "None" },
+      "Pipeline" to "Decode/import → optional REX single-frame GLSL spatial passes → native MPV scaling/colour/dither → timed display. No frame interpolation or temporal shader history is claimed.",
     )
     RexVisionDiagnostics.publish(RexVisionSnapshot(
       running = state.surfaceAttached, probed = true, unavailable = unavailable, active = active, source = source, output = output,

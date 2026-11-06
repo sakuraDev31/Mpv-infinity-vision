@@ -24,6 +24,7 @@ internal data class RexAlgorithm(
   val unavailable: String? = null,
   val tier: RexImplementationTier = RexImplementationTier.TIER_1,
   val gpuAccelerated: Boolean = true,
+  val shaderPasses: Set<String> = emptySet(),
   val experimental: Boolean = false,
 ) {
   constructor(
@@ -61,7 +62,7 @@ internal data class RexJsonApplyResult(
 )
 
 internal object RexVisionPolicy {
-  const val TOTAL_ALGORITHM_COUNT = 121
+  const val TOTAL_ALGORITHM_COUNT = 122
   const val DEFAULT_CINEMATIC_FPS = 24
 
   val globalDefaultsSummary = listOf(
@@ -107,6 +108,7 @@ internal object RexVisionPolicy {
     unavailable: String? = null,
     tier: RexImplementationTier = RexImplementationTier.TIER_1,
     gpuAccelerated: Boolean = true,
+    shaderPasses: Set<String> = emptySet(),
   ): RexAlgorithm = RexAlgorithm(
     index = index,
     id = id,
@@ -120,6 +122,7 @@ internal object RexVisionPolicy {
     unavailable = unavailable,
     tier = tier,
     gpuAccelerated = gpuAccelerated,
+    shaderPasses = shaderPasses,
     experimental = tier == RexImplementationTier.TIER_3,
   )
 
@@ -131,9 +134,9 @@ internal object RexVisionPolicy {
     alg(4, "sigmoid", "Sigmoid Upscaling", "Image Scaling & Reconstruction", "Sigmoidal light domain reduces scaling halos; only used during upscaling.", "Medium", setOf("sigmoid-upscaling"), tier = RexImplementationTier.TIER_1),
     alg(5, "correct_downscaling", "Correct Downscaling", "Image Scaling & Reconstruction", "Linear-light downscaling with antialiased filter support.", "Medium", setOf("dscale", "linear-downscaling", "correct-downscaling"), tier = RexImplementationTier.TIER_1),
     alg(6, "debanding", "Debanding", "Compression & Image Restoration", "GPU gradient smoothing; low thresholds preserve texture. Strength is MPV's threshold.", "Medium", setOf("deband", "deband-threshold", "deband-iterations", "deband-grain"), range = 4..48, tier = RexImplementationTier.TIER_1),
-    alg(7, "deblocking", "Deblocking", "Compression & Image Restoration", "Remove block-boundary compression artefacts.", "High", unavailable = "No independent zero-copy deblocking stage is integrated. Codec in-loop deblocking remains decoder-controlled.", tier = RexImplementationTier.TIER_2),
+    alg(7, "deblocking", "Deblocking", "Compression & Image Restoration", "True codec block-grid artifact removal.", "High", unavailable = "True block-grid deblocking is not implemented: the spatial shader has no codec block phase or quantization metadata. Decoder in-loop deblocking remains codec-controlled.", tier = RexImplementationTier.TIER_2),
     alg(8, "deringing", "Deringing", "Compression & Image Restoration", "Scaler anti-ringing clamp, not restoration of ringing baked into the source.", "Low", setOf("scale-antiring"), range = 0..100, tier = RexImplementationTier.TIER_1),
-    alg(9, "denoising", "Denoising", "Compression & Image Restoration", "Remove spatial noise while retaining fine texture.", "High", unavailable = "No validated spatial denoiser is integrated; CPU lavfi filters would force frame downloads on hardware decode.", tier = RexImplementationTier.TIER_2),
+    alg(9, "denoising", "Denoising", "Compression & Image Restoration", "Single-frame edge-preserving spatial noise reduction; no temporal denoising.", "Medium", shaderPasses = setOf("texture-denoise"), tier = RexImplementationTier.TIER_2),
     alg(10, "sharpening", "Sharpening", "Compression & Image Restoration", "MPV renderer sharpening, limited to a conservative 0–0.3 to reduce halos.", "Low", setOf("sharpen"), range = 0..30, tier = RexImplementationTier.TIER_1),
     alg(11, "grain", "Grain Restoration", "Compression & Image Restoration", "Restore natural grain without destroying detail.", "High", unavailable = "Deband noise and codec film-grain synthesis are not grain restoration; no restoration model is integrated.", tier = RexImplementationTier.TIER_3),
     alg(12, "interpolation", "Frame Interpolation", "Temporal & Motion Processing", "MPV display-timed frame blending, NOT motion estimation. Off by default; explicitly enabling changes presentation cadence.", "High", setOf("interpolation", "video-sync", "tscale"), tier = RexImplementationTier.TIER_1),
@@ -156,9 +159,9 @@ internal object RexVisionPolicy {
     alg(27, "realesrgan_enhancement", "Real-ESRGAN Video Frame Enhancement", "AI & Neural Restoration", "Generative adversarial network restoration for anime and live-action video frames.", "High", unavailable = "Experimental Real-ESRGAN tensor pass exceeds real-time mobile frame budget without dedicated NPU offload.", tier = RexImplementationTier.TIER_3),
     alg(28, "detail_reconstruction", "Detail Reconstruction", "Sharpening & Deconvolution", "High-frequency detail reconstruction via native renderer kernel shaping.", "Medium", setOf("scale-blur"), range = 90..110, tier = RexImplementationTier.TIER_1),
     alg(29, "texture_recovery", "Texture Recovery", "Sharpening & Deconvolution", "Fine surface micro-texture recovery with gradient threshold protection.", "Medium", setOf("deband-threshold"), range = 8..32, tier = RexImplementationTier.TIER_1),
-    alg(30, "edge_aware_enhancement", "Edge-Aware Enhancement", "Sharpening & Deconvolution", "Edge-guided contrast and antiringing enhancement across luminance boundaries.", "Low", setOf("scale-antiring", "dscale-antiring"), range = 0..100, tier = RexImplementationTier.TIER_1),
-    alg(31, "adaptive_local_sharpening", "Adaptive Local Sharpening", "Sharpening & Deconvolution", "Locally modulated sharpening constrained to prevent edge overshoot.", "Low", setOf("sharpen"), range = 0..30, tier = RexImplementationTier.TIER_1),
-    alg(32, "multi_scale_sharpening", "Multi-Scale Sharpening", "Sharpening & Deconvolution", "Multi-band spatial detail accentuation across luma and chroma scales.", "Medium", setOf("sharpen", "cscale-antiring"), range = 0..30, tier = RexImplementationTier.TIER_2),
+    alg(30, "edge_aware_enhancement", "Edge-Aware Enhancement", "Sharpening & Deconvolution", "Scharr-gradient confidence, multi-scale luma detail gating and local overshoot-limited sharpening.", "High", shaderPasses = setOf("edge-sharpen"), tier = RexImplementationTier.TIER_1),
+    alg(31, "adaptive_local_sharpening", "Adaptive Local Sharpening", "Sharpening & Deconvolution", "Local edge-confidence and detail-confidence gated luma enhancement with neighborhood bounds.", "High", shaderPasses = setOf("edge-sharpen"), tier = RexImplementationTier.TIER_1),
+    alg(32, "multi_scale_sharpening", "Multi-Scale Sharpening", "Sharpening & Deconvolution", "Two-scale luminance detail enhancement gated by Scharr edge confidence and local bounds.", "High", shaderPasses = setOf("edge-sharpen"), tier = RexImplementationTier.TIER_2),
     alg(33, "unsharp_mask", "Unsharp Mask", "Sharpening & Deconvolution", "Classical unsharp masking mapped to native GPU renderer sharpen pass.", "Low", setOf("sharpen"), range = 0..30, tier = RexImplementationTier.TIER_1),
     alg(34, "wiener_deconvolution", "Wiener Deconvolution", "Sharpening & Deconvolution", "Minimum mean-square error frequency-domain inverse filtering for optical blur.", "High", unavailable = "Requires per-frame PSF noise-power spectrum estimation not present in native VO.", tier = RexImplementationTier.TIER_2),
     alg(35, "richardson_lucy_deconvolution", "Richardson-Lucy Deconvolution", "Sharpening & Deconvolution", "Iterative maximum-likelihood point-spread function deconvolution.", "High", unavailable = "Iterative PSF deconvolution requires multi-pass FFT buffers not enabled in zero-copy VO.", tier = RexImplementationTier.TIER_2),
@@ -184,18 +187,18 @@ internal object RexVisionPolicy {
     alg(51, "ai_video_denoising", "AI Video Denoising", "AI & Neural Restoration", "Deep convolutional spatio-temporal blind noise removal.", "High", unavailable = "Experimental neural denoiser requires external tensor runtime.", tier = RexImplementationTier.TIER_3),
     alg(52, "non_local_means", "Non-Local Means (NLM)", "Compression & Image Restoration", "Patch-similarity weighted spatial denoising across non-local neighbourhoods.", "High", unavailable = "Full NLM patch search requires custom compute shader pass.", tier = RexImplementationTier.TIER_2),
     alg(53, "bm3d_denoising", "BM3D Denoising", "Compression & Image Restoration", "Block-matching and 3D collaborative transform-domain filtering.", "High", unavailable = "3D collaborative transform grouping is not real-time on mobile GPU without frame readback.", tier = RexImplementationTier.TIER_2),
-    alg(54, "bilateral_filtering", "Bilateral Filtering", "Compression & Image Restoration", "Edge-preserving spatial smoothing using spatial and photometric range kernels.", "Medium", setOf("deband", "deband-range"), range = 8..32, tier = RexImplementationTier.TIER_2),
-    alg(55, "guided_image_filtering", "Guided Image Filtering", "Compression & Image Restoration", "Local linear model edge-preserving smoothing guided by luma structure.", "Medium", setOf("deband", "deband-threshold"), range = 8..36, tier = RexImplementationTier.TIER_2),
-    alg(56, "adaptive_spatial_denoising", "Adaptive Spatial Denoising", "Compression & Image Restoration", "Variance-adaptive gradient smoothing in flat regions while locking edges.", "Medium", setOf("deband", "deband-threshold", "deband-range"), range = 6..32, tier = RexImplementationTier.TIER_2),
+    alg(54, "bilateral_filtering", "Bilateral Filtering", "Compression & Image Restoration", "Compact 3x3 luma-guided range-weighted spatial smoothing; strong edges are protected.", "Medium", shaderPasses = setOf("texture-denoise"), tier = RexImplementationTier.TIER_2),
+    alg(55, "guided_image_filtering", "Guided Image Filtering", "Compression & Image Restoration", "Local-luma-guided spatial smoothing with conservative flat-region blending.", "Medium", shaderPasses = setOf("texture-denoise"), tier = RexImplementationTier.TIER_2),
+    alg(56, "adaptive_spatial_denoising", "Adaptive Spatial Denoising", "Compression & Image Restoration", "Local-range-adaptive spatial noise reduction; blend strength falls near edges and texture.", "Medium", shaderPasses = setOf("texture-denoise"), tier = RexImplementationTier.TIER_2),
     alg(57, "multiframe_noise_reduction", "Multi-Frame Noise Reduction", "Temporal & Motion Processing", "Temporal recursive averaging across aligned video frames.", "High", unavailable = "Requires multi-frame history buffer outside single-frame native VO.", tier = RexImplementationTier.TIER_2),
     alg(58, "ai_compression_artifact_removal", "AI Compression Artifact Removal", "AI & Neural Restoration", "Neural restoration of heavy quantization, macroblocking, and mosquito noise.", "High", unavailable = "Experimental neural artifact removal network is not bundled in native VO.", tier = RexImplementationTier.TIER_3),
     alg(59, "ringing_blocking_suppression", "Ringing and Blocking Suppression", "Compression & Image Restoration", "Combined deband gradient smoothing and scaler anti-ringing limiter.", "Medium", setOf("deband", "scale-antiring"), range = 0..100, tier = RexImplementationTier.TIER_1),
     alg(60, "chroma_noise_reduction", "Chroma Noise Reduction", "Compression & Image Restoration", "Suppresses high-frequency U/V colour sub-sampling noise via chroma antiringing.", "Low", setOf("cscale-antiring"), range = 0..100, tier = RexImplementationTier.TIER_1),
-    alg(61, "mosquito_noise_reduction", "Mosquito Noise Reduction", "Compression & Image Restoration", "Suppresses high-frequency DCT quantization fluctuations around sharp edges.", "Medium", setOf("deband", "scale-antiring"), range = 0..100, tier = RexImplementationTier.TIER_2),
+    alg(61, "mosquito_noise_reduction", "Mosquito Noise Reduction", "Compression & Image Restoration", "Conservative local edge-overshoot cleanup; not true DCT classification or block deblocking.", "Medium", shaderPasses = setOf("compression-cleanup"), tier = RexImplementationTier.TIER_2),
     alg(62, "adaptive_deblocking", "Adaptive Deblocking", "Compression & Image Restoration", "Quantization-adaptive block boundary smoothing via wide-radius GPU debanding.", "Medium", setOf("deband", "deband-range", "deband-iterations"), range = 12..40, tier = RexImplementationTier.TIER_2),
 
     // 63 - 77: HDR, Tone Mapping, Retinex & Colour Science
-    alg(63, "local_tone_mapping", "Local Tone Mapping", "Lighting, Colour & HDR", "Spatially varying HDR luminance compression preserving local micro-contrast.", "Medium", setOf("tone-mapping"), choices = listOf("bt.2390", "spline", "mobius", "reinhard"), tier = RexImplementationTier.TIER_2),
+    alg(63, "local_tone_mapping", "Local Tone Mapping", "Lighting, Colour & HDR", "Mild local-luminance-adaptive SDR highlight shoulder; does not recover clipped pixels or create HDR.", "Medium", shaderPasses = setOf("local-tone"), tier = RexImplementationTier.TIER_2),
     alg(64, "adaptive_tone_mapping", "Adaptive Tone Mapping", "Lighting, Colour & HDR", "Dynamic scene-histogram percentile tone mapping.", "Medium", setOf("tone-mapping", "hdr-compute-peak"), choices = listOf("auto", "yes", "no"), tier = RexImplementationTier.TIER_1),
     alg(65, "global_tone_mapping", "Global Tone Mapping", "Lighting, Colour & HDR", "Consistent monotonic global EOTF luminance curve mapping.", "Low", setOf("tone-mapping"), choices = listOf("bt.2390", "hable", "reinhard", "mobius", "clip"), tier = RexImplementationTier.TIER_1),
     alg(66, "hdr_reconstruction", "HDR Reconstruction", "Lighting, Colour & HDR", "Inverse tone mapping / peak luminance recovery within native colour pipeline.", "Medium", setOf("tone-mapping-param"), range = 10..100, tier = RexImplementationTier.TIER_2),
@@ -208,8 +211,8 @@ internal object RexVisionPolicy {
     alg(73, "white_balance_correction", "White Balance Correction", "Lighting, Colour & HDR", "Neutralizes chromaticity cast via native hue and saturation balance.", "Low", setOf("hue", "saturation"), range = -15..15, tier = RexImplementationTier.TIER_1),
     alg(74, "colour_constancy", "Colour Constancy", "Lighting, Colour & HDR", "Maintains perceptual colour appearance across differing target primaries.", "Low", setOf("target-prim", "saturation"), choices = listOf("auto", "bt.709", "bt.2020", "dci-p3"), tier = RexImplementationTier.TIER_1),
     alg(75, "adaptive_gamma_correction", "Adaptive Gamma Correction", "Lighting, Colour & HDR", "Transfer-curve aware gamma adjustment.", "Low", setOf("gamma"), range = -20..20, tier = RexImplementationTier.TIER_1),
-    alg(76, "highlight_bloom_control", "Highlight Bloom Control", "Lighting, Colour & HDR", "Suppresses halation and highlight bleeding in high-luminance transitions.", "Low", setOf("sigmoid-upscaling", "scale-antiring"), range = 0..100, tier = RexImplementationTier.TIER_1),
-    alg(77, "specular_highlight_preservation", "Specular Highlight Preservation", "Lighting, Colour & HDR", "Preserves chromaticity and peak roll-off in bright specular highlights.", "Medium", setOf("tone-mapping"), choices = listOf("bt.2390", "spline", "hable"), tier = RexImplementationTier.TIER_1),
+    alg(76, "highlight_bloom_control", "Highlight Bloom Control", "Lighting, Colour & HDR", "Restrained local bright-outlier roll-off while retaining broad artistic glow; not optical halation removal.", "Medium", shaderPasses = setOf("highlight-control"), tier = RexImplementationTier.TIER_1),
+    alg(77, "specular_highlight_preservation", "Specular Highlight Preservation", "Lighting, Colour & HDR", "Restrained highlight shoulder with RGB-scaled chromaticity preservation; clipped source detail cannot be recovered.", "Medium", shaderPasses = setOf("highlight-control"), tier = RexImplementationTier.TIER_1),
 
     // 78 - 88: Neural & Spatial Upscaling (EASU, RCAS, FSR, NEDI, Chroma)
     alg(78, "ai_video_super_resolution", "AI Video Super Resolution", "AI & Neural Restoration", "Temporally recurrent neural video super-resolution (BasicVSR/EDVR class).", "High", unavailable = "Experimental recurrent neural VSR requires dedicated NPU tensor pipeline.", tier = RexImplementationTier.TIER_3),
@@ -247,21 +250,22 @@ internal object RexVisionPolicy {
     alg(106, "adaptive_luma_enhancement", "Adaptive Luma Enhancement", "Perceptual & Luma-Chroma", "Optimizes luma transfer response across dark and bright regions.", "Low", setOf("gamma", "sigmoid-upscaling"), range = -15..15, tier = RexImplementationTier.TIER_1),
     alg(107, "chroma_reconstruction", "Chroma Reconstruction", "Perceptual & Luma-Chroma", "Reconstructs subsampled chroma planes with anti-ringing protection.", "Medium", setOf("cscale", "cscale-antiring"), choices = listOf("spline36", "lanczos", "mitchell"), tier = RexImplementationTier.TIER_1),
     alg(108, "perceptual_sharpness", "Perceptual Sharpness Optimization", "Perceptual & Luma-Chroma", "Balances sharpening, sigmoid light conversion, and anti-ringing for natural acutance.", "Low", setOf("sharpen", "sigmoid-upscaling", "scale-antiring"), range = 0..25, tier = RexImplementationTier.TIER_1),
-    alg(109, "texture_aware_denoising", "Texture-Aware Denoising", "Compression & Image Restoration", "Low-threshold gradient smoothing that preserves film grain and fine detail.", "Medium", setOf("deband", "deband-threshold", "deband-grain"), range = 4..24, tier = RexImplementationTier.TIER_2),
-    alg(110, "edge_preserving_smoothing", "Edge-Preserving Smoothing", "Compression & Image Restoration", "Smooths quantization steps in flat gradients while locking structural edges.", "Medium", setOf("deband", "deband-threshold", "deband-range"), range = 4..32, tier = RexImplementationTier.TIER_1),
+    alg(109, "texture_aware_denoising", "Texture-Aware Denoising", "Compression & Image Restoration", "Conservative luma-guided 3x3 denoising with edge/range gating to limit texture smearing.", "Medium", shaderPasses = setOf("texture-denoise"), tier = RexImplementationTier.TIER_2),
+    alg(110, "edge_preserving_smoothing", "Edge-Preserving Smoothing", "Compression & Image Restoration", "Edge-aware spatial smoothing in low-variance regions; strong contours receive reduced blending.", "Medium", shaderPasses = setOf("texture-denoise"), tier = RexImplementationTier.TIER_1),
     alg(111, "halo_suppression", "Halo Suppression", "Compression & Image Restoration", "Suppresses light/dark overshoot halos using sigmoidal upscaling and anti-ringing.", "Low", setOf("sigmoid-upscaling", "scale-antiring", "dscale-antiring"), range = 0..100, tier = RexImplementationTier.TIER_1),
 
     // 112 - 121: Scene-Adaptive & Autonomous GPU Management
-    alg(112, "scene_adaptive_processing", "Scene-Adaptive Processing", "Scene & Adaptive Intelligence", "Adapts tone mapping and debanding parameters to live scene characteristics.", "Medium", setOf("hdr-compute-peak", "tone-mapping"), tier = RexImplementationTier.TIER_2),
-    alg(113, "shot_boundary_detection", "Shot Boundary Detection", "Scene & Adaptive Intelligence", "Detects camera cuts for HDR peak metering and temporal reset.", "Low", setOf("hdr-scene-threshold-low", "hdr-scene-threshold-high"), tier = RexImplementationTier.TIER_2),
+    alg(112, "scene_adaptive_processing", "Scene-Adaptive Processing", "Scene & Adaptive Intelligence", "Per-pixel local luminance adaptation only; whole-scene histogram and shot state are not implemented.", "Medium", unavailable = "Requires frame-history histograms and scene state; not provided by the current single-frame shader.", tier = RexImplementationTier.TIER_2),
+    alg(113, "shot_boundary_detection", "Shot Boundary Detection", "Scene & Adaptive Intelligence", "Detects camera cuts for HDR peak metering and temporal reset.", "Low", unavailable = "No temporal frame-history or shot-boundary detector is integrated.", tier = RexImplementationTier.TIER_2),
     alg(114, "scene_classification", "Scene Classification", "Scene & Adaptive Intelligence", "Classifies content characteristics (SDR/HDR, resolution, frame rate) from stream metadata.", "Low", setOf("tone-mapping"), tier = RexImplementationTier.TIER_2),
     alg(115, "motion_complexity_analysis", "Motion Complexity Analysis", "Scene & Adaptive Intelligence", "Monitors frame-drop cadence and presentation jitter to gauge motion load.", "Low", setOf("video-sync"), tier = RexImplementationTier.TIER_2),
     alg(116, "dynamic_quality_scaling", "Dynamic Quality Scaling", "Scene & Adaptive Intelligence", "Automatically scales reconstruction complexity when thermal or frame-drop pressure rises.", "Low", setOf("scale", "dscale"), tier = RexImplementationTier.TIER_1),
     alg(117, "content_adaptive_filtering", "Content-Adaptive Filtering", "Scene & Adaptive Intelligence", "Selects optimal chroma and luma filter parameters based on source format.", "Low", setOf("correct-downscaling", "linear-downscaling"), tier = RexImplementationTier.TIER_1),
     alg(118, "realtime_artifact_detection", "Real-Time Artifact Detection", "Scene & Adaptive Intelligence", "Monitors decoder drop counters, delayed VO frames, and banding risk in real time.", "Low", setOf("deband"), tier = RexImplementationTier.TIER_2),
     alg(119, "auto_parameter_selection", "Automatic Enhancement Parameter Selection", "Scene & Adaptive Intelligence", "Automatically tunes native filter thresholds for balanced visual fidelity.", "Low", setOf("tone-mapping", "dither-depth"), tier = RexImplementationTier.TIER_1),
-    alg(120, "per_scene_profiles", "Per-Scene Processing Profiles", "Scene & Adaptive Intelligence", "Applies dynamic scene-level luminance and colour adaptation.", "Medium", setOf("hdr-compute-peak"), tier = RexImplementationTier.TIER_2),
+    alg(120, "per_scene_profiles", "Per-Scene Processing Profiles", "Scene & Adaptive Intelligence", "Persistent per-scene profiles require shot detection and temporal scene state.", "Low", unavailable = "No shot-boundary state or per-scene profile store is integrated.", tier = RexImplementationTier.TIER_2),
     alg(121, "adaptive_gpu_load_management", "Adaptive GPU Load Management", "GPU & Playback Processing", "Monitors thermal headroom and frame drops to shed heavy GPU stages gracefully.", "Low", setOf("scale"), tier = RexImplementationTier.TIER_1),
+    alg(122, "temporal_edge_stability", "Temporal Edge Stability", "Temporal & Motion Processing", "Reduces edge shimmer using motion-aligned frame history without changing source cadence.", "High", unavailable = "Requires persistent frame history, motion alignment and scene-cut resets; the current MPV GLSL hook is single-frame.", tier = RexImplementationTier.TIER_2),
   )
 
   private val byId: Map<String, RexAlgorithm> = algorithms.associateBy { it.id }
@@ -503,7 +507,7 @@ internal object RexVisionPolicy {
     val sigmoidRequested = enabled.any {
       it in setOf(
         "sigmoid", "easu", "fsr_spatial_upscaling", "subpixel_detail_reconstruction",
-        "highlight_bloom_control", "adaptive_contrast_enhancement", "perceptual_contrast_enhancement",
+        "adaptive_contrast_enhancement", "perceptual_contrast_enhancement",
         "adaptive_luma_enhancement", "perceptual_sharpness", "halo_suppression",
       )
     }
@@ -517,9 +521,7 @@ internal object RexVisionPolicy {
 
     val debandActive = enabled.any {
       it in setOf(
-        "debanding", "bilateral_filtering", "guided_image_filtering", "adaptive_spatial_denoising",
-        "ringing_blocking_suppression", "mosquito_noise_reduction", "adaptive_deblocking",
-        "frequency_separation", "texture_aware_denoising", "edge_preserving_smoothing",
+        "debanding", "ringing_blocking_suppression", "adaptive_deblocking", "frequency_separation",
       )
     }
     if (debandActive) {
@@ -531,9 +533,8 @@ internal object RexVisionPolicy {
 
     val antiringActive = enabled.any {
       it in setOf(
-        "deringing", "edge_aware_enhancement", "ringing_artifact_suppression",
-        "ringing_blocking_suppression", "mosquito_noise_reduction", "rcas",
-        "adaptive_sharpening_shader", "edge_detection", "local_detail_enhancement",
+        "deringing", "ringing_artifact_suppression", "ringing_blocking_suppression", "rcas",
+        "edge_detection", "local_detail_enhancement",
         "perceptual_sharpness", "halo_suppression",
       )
     }
@@ -569,10 +570,10 @@ internal object RexVisionPolicy {
       put("tscale", if ("adaptive_motion_estimation" in enabled) choice("adaptive_motion_estimation", "oversample") else "oversample")
     }
 
-    if ("tone_mapping" in enabled || "global_tone_mapping" in enabled || "local_tone_mapping" in enabled || "specular_highlight_preservation" in enabled) {
+    if ("tone_mapping" in enabled || "global_tone_mapping" in enabled) {
       put("tone-mapping", choice("tone_mapping", "auto"))
     }
-    if ("adaptive_tone_mapping" in enabled || "highlight_recovery" in enabled || "scene_adaptive_processing" in enabled || "per_scene_profiles" in enabled) {
+    if ("adaptive_tone_mapping" in enabled || "highlight_recovery" in enabled) {
       put("hdr-compute-peak", choice("adaptive_tone_mapping", "auto"))
     }
     if ("colour_management" in enabled || "colour_constancy" in enabled) {
