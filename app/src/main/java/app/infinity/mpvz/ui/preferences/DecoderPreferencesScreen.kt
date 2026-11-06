@@ -163,6 +163,10 @@ object DecoderPreferencesScreen : Screen {
               .padding(padding)
               .then(settingsHighlight),
         ) {
+          item(key = "decoder_top_json_controller") {
+            RexJsonConfigurationCard(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+          }
+
           item {
             PreferenceSectionHeader(
               title = stringResource(R.string.pref_decoder),
@@ -174,9 +178,13 @@ object DecoderPreferencesScreen : Screen {
             PreferenceCard {
               TextButton(onClick = { backstack.add(RexVisionPreferencesScreen) }, modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(8.dp)) {
-                  Text("REX Vision", style = MaterialTheme.typography.titleLarge)
-                  Text("Native enhancement pipeline · cinematic presets · device-aware controls")
+                  Text("REX Vision (121 Video Enhancement Catalogue)", style = MaterialTheme.typography.titleLarge)
+                  Text("Native enhancement pipeline · JSON controller · Tiers 1–3 · One-tap original bypass")
                 }
+              }
+              PreferenceDivider()
+              TextButton(onClick = { backstack.add(CodecCapabilitiesScreen) }, modifier = Modifier.fillMaxWidth()) {
+                Text("Codecs & 121-Algorithm On/Off Catalogue")
               }
               PreferenceDivider()
               TextButton(onClick = { backstack.add(DecoderInformationScreen) }, modifier = Modifier.fillMaxWidth()) {

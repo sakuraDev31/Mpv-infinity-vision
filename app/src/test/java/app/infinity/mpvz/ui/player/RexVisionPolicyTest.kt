@@ -5,17 +5,22 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class RexVisionPolicyTest {
-  @Test fun catalogContainsAll24DistinctTechniques() {
-    assertEquals(24, RexVisionPolicy.algorithms.size)
-    assertEquals(24, RexVisionPolicy.algorithms.map { it.id }.distinct().size)
-    assertEquals(5, RexVisionPolicy.algorithms.map { it.category }.distinct().size)
+  @Test fun catalogContainsAll121DistinctTechniquesAndTiers() {
+    assertEquals(121, RexVisionPolicy.TOTAL_ALGORITHM_COUNT)
+    assertEquals(121, RexVisionPolicy.algorithms.size)
+    assertEquals(121, RexVisionPolicy.algorithms.map { it.id }.distinct().size)
+    assertEquals((1..121).toList(), RexVisionPolicy.algorithms.map { it.index })
+    assertEquals(121, RexVisionPolicy.algorithms.map { it.title }.distinct().size)
     assertTrue(RexVisionPolicy.algorithms.all { it.description.isNotBlank() && it.impact in setOf("Low", "Medium", "High") })
+    // Verify all 3 implementation tiers are represented
+    val tiers = RexVisionPolicy.algorithms.map { it.tier }.toSet()
+    assertEquals(setOf(RexImplementationTier.TIER_1, RexImplementationTier.TIER_2, RexImplementationTier.TIER_3), tiers)
   }
 
   @Test fun everyControlHasNativeBindingsOrAnHonestUnsupportedReason() {
     RexVisionPolicy.algorithms.forEach {
       assertTrue(it.title, it.options.isNotEmpty() || it.id == "gpu_shaders" || !it.unavailable.isNullOrBlank())
-      if (it.unavailable != null) assertTrue(it.options.isEmpty())
+      if (it.unavailable != null) assertTrue(it.title, it.options.isEmpty())
     }
   }
 
@@ -23,6 +28,7 @@ class RexVisionPolicyTest {
     listOf("Battery Saver", "Balanced", "High Quality", "Maximum Quality").forEach {
       val ids = RexVisionPolicy.preset(it)
       assertFalse("interpolation" in ids)
+      assertFalse("ai_video_frame_interpolation" in ids)
       assertFalse("sharpening" in ids)
       assertFalse("hdr_sdr" in ids)
       assertFalse("gamma" in ids)
@@ -159,5 +165,36 @@ class RexVisionPolicyTest {
     repeat(50) { assertTrue(budget.sample(0, false, true)) }
     repeat(29) { assertTrue(budget.sample(0, false, false)) }
     assertFalse(budget.sample(0, false, false))
+  }
+
+  @Test fun jsonConfigEnablesAndDisablesSelectiveAlgorithmsByIndexIdAndTitle() {
+    val json = """
+      {
+        "masterEnabled": true,
+        "bypassToOriginal": false,
+        "enable": [1, 6, "rcas", "121"],
+        "disable": [2, "tone_mapping"]
+      }
+    """.trimIndent()
+    val res = RexVisionPolicy.applyJsonConfig(json, RexVisionPolicy.defaults)
+    assertNull(res.error)
+    assertEquals(true, res.masterEnabled)
+    assertEquals(false, res.bypassOriginal)
+    assertTrue("lanczos" in res.enabledIds)
+    assertFalse("spline36" in res.enabledIds)
+    assertTrue("debanding" in res.enabledIds)
+    assertTrue("rcas" in res.enabledIds)
+    assertTrue("adaptive_gpu_load_management" in res.enabledIds)
+    assertFalse("tone_mapping" in res.enabledIds)
+  }
+
+  @Test fun jsonConfigRoundTripsExportAndImportAndSupportsOneTapBypass() {
+    val customSet = setOf("lanczos", "sigmoid", "debanding", "gpu_shaders", "hardware_decoding", "adaptive_gpu_load_management")
+    val exported = RexVisionPolicy.toJsonConfig(customSet, bypassOriginal = true, masterEnabled = true)
+    val reapplied = RexVisionPolicy.applyJsonConfig(exported, emptySet())
+    assertNull(reapplied.error)
+    assertEquals(true, reapplied.bypassOriginal)
+    assertEquals(true, reapplied.masterEnabled)
+    assertEquals(customSet, reapplied.enabledIds)
   }
 }

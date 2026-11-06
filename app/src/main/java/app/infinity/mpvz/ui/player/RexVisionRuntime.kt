@@ -136,8 +136,9 @@ internal class RexVisionRuntime(context: Context, private val preferences: Decod
     val hot = (Build.VERSION.SDK_INT >= 29 && (power?.currentThermalStatus ?: 0) >= PowerManager.THERMAL_STATUS_MODERATE) || power?.isPowerSaveMode == true
     val severe = Build.VERSION.SDK_INT >= 29 && (power?.currentThermalStatus ?: 0) >= PowerManager.THERMAL_STATUS_SEVERE
     val constrained = severe || (preferences.rexVision.adaptive.get() && budget.sample(delta, hot, state.paused))
+    val bypassOriginal = preferences.rexVision.bypassToOriginal.get()
     val enabled = requested - unavailable.keys
-    val desired = if (preferences.rexVision.enabled.get() && external == null) {
+    val desired = if (preferences.rexVision.enabled.get() && !bypassOriginal && external == null) {
       RexVisionPolicy.plan(enabled, preferences.rexVision.snapshot(), constrained).filterKeys { name ->
         !owned(name) && supported(name) && RexVisionPolicy.algorithms.any { name in it.options && it.id !in unavailable }
       }
@@ -170,7 +171,7 @@ internal class RexVisionRuntime(context: Context, private val preferences: Decod
     rejected.keys.forEach { id ->
       RexVisionPolicy.algorithms.first { it.id == id }.options.toList().asReversed().forEach(::restore)
     }
-    val active = if (preferences.rexVision.enabled.get() && external == null) RexVisionPolicy.algorithms.filter { a ->
+    val active = if (preferences.rexVision.enabled.get() && !bypassOriginal && external == null) RexVisionPolicy.algorithms.filter { a ->
       a.id in enabled && a.id !in unavailable && (a.id == "gpu_shaders" || a.options.all { applied[it] != null }) &&
         !(constrained && a.id in setOf("interpolation", "debanding", "sigmoid", "sharpening"))
     }.map { it.title } else emptyList()
@@ -202,6 +203,7 @@ internal class RexVisionRuntime(context: Context, private val preferences: Decod
       "Active decoder" to when { hwdec == null -> "Unavailable"; hwdec == "no" -> "Software"; hwdec.startsWith("mediacodec") -> "MediaCodec"; else -> "Other: $hwdec" },
       "Hardware acceleration" to when (hwdec) { null -> "Unavailable"; "no" -> "Inactive"; else -> "Active ($hwdec)" },
       "MediaCodec candidates (not proof of codec/profile support)" to mediaCodecs.joinToString().ifEmpty { "None reported" },
+      "Original video bypass" to if (bypassOriginal) "Active (One-tap bypass to original unprocessed video)" else "Inactive",
       "Adaptive quality" to if (constrained) "Reduced: thermal/power-save or sustained frame drops" else "Requested quality",
       "Processing load" to "No portable GPU utilization counter; frame drops, thermal state and available pass timings are used.",
       "Enabled REX stages (verified options; content-dependent)" to active.joinToString().ifEmpty { "None" },
@@ -213,7 +215,12 @@ internal class RexVisionRuntime(context: Context, private val preferences: Decod
     RexVisionDiagnostics.publish(RexVisionSnapshot(
       running = state.surfaceAttached, probed = true, unavailable = unavailable, active = active, source = source, output = output,
       errors = errors + rejected.values.distinct(),
-      message = external ?: if (!preferences.rexVision.enabled.get()) "REX disabled; existing playback settings are unchanged. Toggle on to apply." else if (constrained) "Adaptive fallback active; source timing and audio sync preserved." else "Native MPV processing. REX switches control the native passes; master-off restores prior player settings. No forced output FPS.",
+      message = external ?: when {
+        !preferences.rexVision.enabled.get() -> "REX disabled; existing playback settings are unchanged. Toggle on to apply."
+        bypassOriginal -> "One-tap bypass active: showing original unprocessed video (24 FPS cadence preserved)."
+        constrained -> "Adaptive fallback active; source timing and audio sync preserved."
+        else -> "Native MPV processing. REX switches control the native passes; master-off restores prior player settings. No forced output FPS."
+      },
     ))
   }
 }
