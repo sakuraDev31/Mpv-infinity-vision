@@ -71,15 +71,20 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.infinity.mpvz.R
+import app.infinity.mpvz.preferences.DecoderPreferences
+import app.infinity.mpvz.preferences.preference.collectAsState
 import app.infinity.mpvz.presentation.Screen
 import app.infinity.mpvz.ui.icons.AppIcon
 import app.infinity.mpvz.ui.icons.Icon
 import app.infinity.mpvz.ui.icons.Icons
+import app.infinity.mpvz.ui.player.RexVisionPolicy
 import app.infinity.mpvz.ui.utils.LocalBackStack
 import app.infinity.mpvz.ui.utils.LocalShowSettingsBackArrow
 import app.infinity.mpvz.ui.utils.popSafely
 import app.infinity.mpvz.utils.clipboard.SafeClipboard
 import kotlinx.serialization.Serializable
+import me.zhanghai.compose.preference.ProvidePreferenceLocals
+import org.koin.compose.koinInject
 
 enum class CodecFilter {
   ALL, HARDWARE, SOFTWARE, VIDEO, AUDIO
@@ -533,6 +538,9 @@ object CodecCapabilitiesScreen : Screen {
   override fun Content() {
     val context = LocalContext.current
     val backstack = LocalBackStack.current
+    val decoderPreferences = koinInject<DecoderPreferences>()
+    val rexPreferences = decoderPreferences.rexVision
+    val selectedAlgorithms by rexPreferences.algorithms.collectAsState()
 
     val codecs = remember { CodecInspector.inspectCodecs(context) }
     val keyVideoCodecs = remember(codecs) { CodecInspector.getKeyVideoCodecs(codecs) }
@@ -652,18 +660,45 @@ object CodecCapabilitiesScreen : Screen {
         )
       },
     ) { innerPadding ->
-      val (settingsListState, settingsHighlight) =
-        rememberSettingsSearchList(CodecCapabilitiesScreen, MaterialTheme.colorScheme.primary)
-      LazyColumn(
-        state = settingsListState,
-        modifier = Modifier
-          .fillMaxSize()
-          .padding(innerPadding)
-          .padding(horizontal = 16.dp)
-          .then(settingsHighlight),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-      ) {
-        // Hero Diagnostics Summary Banner with Live Stat Pills
+      ProvidePreferenceLocals {
+        val (settingsListState, settingsHighlight) =
+          rememberSettingsSearchList(CodecCapabilitiesScreen, MaterialTheme.colorScheme.primary)
+        LazyColumn(
+          state = settingsListState,
+          modifier = Modifier
+            .fillMaxSize()
+            .padding(innerPadding)
+            .padding(horizontal = 16.dp)
+            .then(settingsHighlight),
+          verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+          // Top-of-page JSON-based code method to enable and disable selective algorithms (1..121)
+          item(key = "codecs_top_json_controller") {
+            RexJsonConfigurationCard()
+          }
+
+          // All 121 video enhancement algorithms with individual on/off toggles & Tier 1-3 grouping
+          rexCatalogueItems(
+            selected = selectedAlgorithms,
+            onToggleAlgorithm = { algorithm, checked ->
+              rexPreferences.algorithms.set(
+                RexVisionPolicy.selection(rexPreferences.algorithms.get(), algorithm.id, checked),
+              )
+              rexPreferences.preset.set("Custom")
+            },
+            onEnableTier = { tier, enable ->
+              var next = rexPreferences.algorithms.get()
+              RexVisionPolicy.algorithms.filter { it.tier == tier }.forEach { alg ->
+                if (!enable || alg.id != "interpolation") {
+                  next = RexVisionPolicy.selection(next, alg.id, enable)
+                }
+              }
+              rexPreferences.algorithms.set(next)
+              rexPreferences.preset.set("Custom")
+            },
+          )
+
+          // Hero Diagnostics Summary Banner with Live Stat Pills
         item {
           Card(
             modifier = Modifier.fillMaxWidth(),
@@ -922,6 +957,7 @@ object CodecCapabilitiesScreen : Screen {
         item {
           Spacer(modifier = Modifier.height(32.dp))
         }
+      }
       }
     }
   }

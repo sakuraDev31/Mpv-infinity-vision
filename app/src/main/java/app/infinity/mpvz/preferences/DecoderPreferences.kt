@@ -117,6 +117,7 @@ class DecoderPreferences(
 /** Kept in the existing preference store so backup/restore and process death work normally. */
 internal class RexVisionPreferences(store: PreferenceStore) {
   val enabled = store.getBoolean("rex_vision_enabled", false)
+  val bypassToOriginal = store.getBoolean("rex_vision_bypass_original", false)
   val adaptive = store.getBoolean("rex_vision_adaptive", true)
   val preset = store.getString("rex_vision_preset", "Balanced")
   val algorithms = store.getStringSet("rex_vision_algorithms", app.infinity.mpvz.ui.player.RexVisionPolicy.defaults)
@@ -127,6 +128,8 @@ internal class RexVisionPreferences(store: PreferenceStore) {
       "deringing" -> "70"
       "sharpening" -> "10"
       "gamma" -> "0"
+      "chroma_noise_reduction" -> "70"
+      "local_contrast_enhancement" -> "0"
       else -> algorithm.choices.firstOrNull().orEmpty()
     }
     algorithm.id to store.getString("rex_vision_value_${algorithm.id}", default)
@@ -138,8 +141,27 @@ internal class RexVisionPreferences(store: PreferenceStore) {
     algorithms.set(app.infinity.mpvz.ui.player.RexVisionPolicy.preset(name))
     values.getValue("lanczos").set(if (name == "Maximum Quality") "4" else "3")
     values.getValue("debanding").set(if (name == "Maximum Quality") "16" else "12")
+    bypassToOriginal.set(false)
     enabled.set(true)
   }
+
+  fun applyJson(jsonText: String): app.infinity.mpvz.ui.player.RexJsonApplyResult {
+    val res = app.infinity.mpvz.ui.player.RexVisionPolicy.applyJsonConfig(jsonText, algorithms.get())
+    if (res.error == null) {
+      algorithms.set(res.enabledIds)
+      res.bypassOriginal?.let { bypassToOriginal.set(it) }
+      res.masterEnabled?.let { enabled.set(it) }
+      res.values.forEach { (id, v) -> values[id]?.set(v) }
+      preset.set("Custom")
+    }
+    return res
+  }
+
+  fun exportJson(): String = app.infinity.mpvz.ui.player.RexVisionPolicy.toJsonConfig(
+    enabled = algorithms.get(),
+    bypassOriginal = bypassToOriginal.get(),
+    masterEnabled = enabled.get(),
+  )
 
   fun snapshot(): Map<String, String> = values.mapValues { it.value.get() } + ("preset" to preset.get())
 }
