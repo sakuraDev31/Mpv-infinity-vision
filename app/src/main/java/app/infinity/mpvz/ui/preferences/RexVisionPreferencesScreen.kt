@@ -56,48 +56,48 @@ object RexVisionPreferencesScreen : Screen {
     val configOwned = currentMpvConfigOverrideOptions()
     val backStack = LocalBackStack.current
     RexScreen("REX Vision") {
-    item {
-      PreferenceCard {
-        Text("Advanced Video Enhancement Engine", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(16.dp))
-        Text("Cinematic defaults: source cadence, no interpolation, no added grain, restrained restoration and no SDR-to-HDR boost. REX uses native MPV passes; it does not replace the decoder or create a CPU frame pipeline.", modifier = Modifier.padding(horizontal = 16.dp))
-        SwitchPreference(enabled, { preferences.enabled.set(it) }, title = { Text("Enable REX Vision") }, summary = { Text("Opt-in. Turning off restores the pre-REX player settings. Changes apply during MPV playback, within two seconds; inactive playback uses them on the next start.") })
-        ListPreference(preset, { preferences.selectPreset(it) }, listOf("Battery Saver", "Balanced", "High Quality", "Maximum Quality"), title = { Text("Performance preset") }, summary = { Text(preset) })
-        SwitchPreference(adaptive, { preferences.adaptive.set(it) }, title = { Text("Automatic performance budget") }, summary = { Text("Reduce GPU work on sustained frame drops, Android thermal pressure or battery saver. Recover after 60 seconds of stable playback. Does not change saved controls.") })
-        Text(diagnostics.message, modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.primary)
-        if (!diagnostics.probed) Text("Device capabilities are not yet verified. Play an MPV video once to unlock verified controls. Presets can be saved now; unavailable stages will be skipped at playback.", modifier = Modifier.padding(16.dp))
-        diagnostics.errors.forEach { Text(it, modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error) }
-        TextButton(onClick = { backStack.add(DecoderInformationScreen) }) { Text("Decoder Information") }
-      }
-    }
-    RexVisionPolicy.algorithms.groupBy { it.category }.forEach { (category, algorithms) ->
-      item(key = category) {
-        var expanded by rememberSaveable(category) { mutableStateOf(false) }
+      item {
         PreferenceCard {
-          TextButton(onClick = { expanded = !expanded }, modifier = Modifier.fillMaxWidth()) {
-            Text("${if (expanded) "−" else "+"} $category (${algorithms.size})")
-          }
-          AnimatedVisibility(expanded) {
-            Column {
-              algorithms.forEach { algorithm ->
-                val reason = algorithm.unavailable
-                  ?: if (algorithm.options.any { it in configOwned }) "Owned by mpv.conf; release option ownership before using REX."
-                  else diagnostics.unavailable[algorithm.id]
-                    ?: if (!diagnostics.probed) "Backend support not yet verified." else null
-                RexAlgorithmControl(algorithm, selected.contains(algorithm.id), enabled && reason == null, reason,
-                  onToggle = { checked ->
-                    preferences.algorithms.set(RexVisionPolicy.selection(preferences.algorithms.get(), algorithm.id, checked))
-                    preferences.preset.set("Custom")
-                  },
-                )
+          Text("Advanced Video Enhancement Engine", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(16.dp))
+          Text("Cinematic defaults: source cadence, no interpolation, no added grain, restrained restoration and no SDR-to-HDR boost. REX uses native MPV passes; it does not replace the decoder or create a CPU frame pipeline.", modifier = Modifier.padding(horizontal = 16.dp))
+          SwitchPreference(enabled, { preferences.enabled.set(it) }, title = { Text("Enable REX Vision") }, summary = { Text("Opt-in. Turning off restores the pre-REX player settings. Changes apply during MPV playback, within two seconds; inactive playback uses them on the next start.") })
+          ListPreference(preset, { preferences.selectPreset(it) }, listOf("Battery Saver", "Balanced", "High Quality", "Maximum Quality"), title = { Text("Performance preset") }, summary = { Text(preset) })
+          SwitchPreference(adaptive, { preferences.adaptive.set(it) }, title = { Text("Automatic performance budget") }, summary = { Text("Reduce GPU work on sustained frame drops, Android thermal pressure or battery saver. Recover after 60 seconds of stable playback. Does not change saved controls.") })
+          Text(diagnostics.message, modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.primary)
+          if (!diagnostics.probed) Text("Device capabilities are not yet verified. Play an MPV video once to unlock verified controls. Presets can be saved now; unavailable stages will be skipped at playback.", modifier = Modifier.padding(16.dp))
+          diagnostics.errors.forEach { Text(it, modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error) }
+          TextButton(onClick = { backStack.add(DecoderInformationScreen) }) { Text("Decoder Information") }
+        }
+      }
+      RexVisionPolicy.algorithms.groupBy { it.category }.forEach { (category, algorithms) ->
+        item(key = category) {
+          var expanded by rememberSaveable(category) { mutableStateOf(false) }
+          PreferenceCard {
+            TextButton(onClick = { expanded = !expanded }, modifier = Modifier.fillMaxWidth()) {
+              Text("${if (expanded) "−" else "+"} $category (${algorithms.size})")
+            }
+            AnimatedVisibility(expanded) {
+              Column {
+                algorithms.forEach { algorithm ->
+                  val reason = algorithm.unavailable
+                    ?: if (algorithm.options.any { it in configOwned }) "Owned by mpv.conf; release option ownership before using REX."
+                    else diagnostics.unavailable[algorithm.id]
+                      ?: if (!diagnostics.probed) "Backend support not yet verified." else null
+                  RexAlgorithmControl(algorithm, selected.contains(algorithm.id), enabled && reason == null, reason,
+                    onToggle = { checked ->
+                      preferences.algorithms.set(RexVisionPolicy.selection(preferences.algorithms.get(), algorithm.id, checked))
+                      preferences.preset.set("Custom")
+                    },
+                  )
+                }
               }
             }
           }
         }
       }
-    }
-    item {
-      Text("Unsupported techniques are intentionally disabled, not simulated with sharpening or fake switches. An enabled request is not proof a pass ran: consult active native options and pipeline diagnostics. Native renderer defaults may already include some operations.", modifier = Modifier.padding(16.dp))
-    }
+      item {
+        Text("Unsupported techniques are intentionally disabled, not simulated with sharpening or fake switches. An enabled request is not proof a pass ran: consult active native options and pipeline diagnostics. Colour-target toggles are overrides of native automatic handling; mandatory colour conversion is not disabled.", modifier = Modifier.padding(16.dp))
+      }
     }
   }
 }
@@ -138,24 +138,24 @@ object DecoderInformationScreen : Screen {
   override fun Content() {
     val snapshot by RexVisionDiagnostics.state.collectAsState()
     RexScreen("Decoder Information") {
-    item { Text(snapshot.message, modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.primary) }
-    item { Text(if (snapshot.running) "Live MPV snapshot · refreshed every 2 seconds" else "Inactive · last MPV snapshot, not current Native Media3 output", modifier = Modifier.padding(16.dp)) }
-    listOf("Source information (before output processing)" to snapshot.source, "Playback output & processing" to snapshot.output).forEach { (title, facts) ->
-      item {
-        PreferenceCard {
-          Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(16.dp))
-          if (facts.isEmpty()) Text("Unavailable — play a video using the MPV engine first.", modifier = Modifier.padding(16.dp))
-          facts.forEach { (label, value) ->
-            SelectionContainer {
-              Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-                Text(value, style = MaterialTheme.typography.bodyMedium)
+      item { Text(snapshot.message, modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.primary) }
+      item { Text(if (snapshot.running) "Live MPV snapshot · refreshed every 2 seconds" else "Inactive · last MPV snapshot, not current Native Media3 output", modifier = Modifier.padding(16.dp)) }
+      listOf("Source information (before output processing)" to snapshot.source, "Playback output & processing" to snapshot.output).forEach { (title, facts) ->
+        item {
+          PreferenceCard {
+            Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(16.dp))
+            if (facts.isEmpty()) Text("Unavailable — play a video using the MPV engine first.", modifier = Modifier.padding(16.dp))
+            facts.forEach { (label, value) ->
+              SelectionContainer {
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                  Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                  Text(value, style = MaterialTheme.typography.bodyMedium)
+                }
               }
             }
           }
         }
       }
-    }
     }
   }
 }

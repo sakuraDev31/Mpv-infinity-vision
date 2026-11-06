@@ -35,8 +35,8 @@ internal object RexVisionPolicy {
     RexAlgorithm("temporal_denoise", "Temporal Denoising", "Temporal & Motion Processing", "Motion-aligned multi-frame noise reduction.", "High", unavailable = "No history-buffer, scene-cut and motion-aligned denoiser is integrated."),
     RexAlgorithm("motion_compensated", "Motion-Compensated Processing", "Temporal & Motion Processing", "Motion-estimated processing using synchronized neighbouring frames.", "High", unavailable = "No independent REX stage. Existing MPVFlow is configured separately in Decoder settings and must not be stacked with REX interpolation."),
     RexAlgorithm("tone_mapping", "Tone Mapping", "Lighting, Colour & HDR", "Native HDR luminance mapping. Auto follows MPV; never promotes SDR to artificial HDR.", "Medium", setOf("tone-mapping"), listOf("auto", "bt.2390", "hable", "reinhard", "clip")),
-    RexAlgorithm("hdr_sdr", "HDR-to-SDR Conversion", "Lighting, Colour & HDR", "Explicit SDR output target; native renderer maps HDR through the same tone-mapping pass, not a second conversion.", "Medium", setOf("target-trc", "target-prim")),
-    RexAlgorithm("gamma", "Gamma Correction", "Lighting, Colour & HDR", "Small native gamma adjustment. Zero is neutral; disabled restores the existing player setting.", "Low", setOf("gamma"), range = -20..20),
+    RexAlgorithm("hdr_sdr", "HDR-to-SDR Conversion", "Lighting, Colour & HDR", "Explicit SDR target override; off leaves native automatic output handling. Mapping uses the same native colour pass, not a second conversion.", "Medium", setOf("target-trc", "target-prim")),
+    RexAlgorithm("gamma", "Gamma Correction", "Lighting, Colour & HDR", "Small native gamma adjustment. Zero is neutral; disabled is neutral while REX is active.", "Low", setOf("gamma"), range = -20..20),
     RexAlgorithm("colour_management", "Colour Management", "Lighting, Colour & HDR", "Native output-primary conversion. When off, the existing target is restored. Auto uses the renderer's target; not calibrated Android ICC support.", "Low", setOf("target-prim"), listOf("auto", "bt.709", "bt.2020")),
     RexAlgorithm("dithering", "Dithering", "Lighting, Colour & HDR", "Dither after colour conversion at the output bit depth. Auto lets MPV detect output depth.", "Low", setOf("dither-depth"), listOf("auto", "8", "10")),
     RexAlgorithm("gpu_shaders", "GPU Shader Processing", "GPU & Playback Processing", "Allow REX native GPU stages. No new CPU frame copies or custom shader chain. Does not disable the renderer or external shaders.", "Medium"),
@@ -45,6 +45,9 @@ internal object RexVisionPolicy {
   )
 
   fun selection(enabled: Set<String>, id: String, value: Boolean): Set<String> {
+    val syncAliases = setOf("resampling", "display_sync")
+    if (id in syncAliases) return if (value) enabled + syncAliases else enabled - syncAliases - "interpolation"
+    if (id == "interpolation" && value) return enabled + syncAliases + id
     val base = if (value && id in scalers) enabled - scalers else enabled
     return if (value) base + id else base - id
   }
@@ -70,6 +73,7 @@ internal object RexVisionPolicy {
     put("linear-downscaling", "no")
     put("correct-downscaling", "no")
     put("deband", "no")
+    put("scale-antiring", "0")
     put("sharpen", "0")
     put("gamma", "0")
     put("tone-mapping", "clip")
@@ -89,8 +93,9 @@ internal object RexVisionPolicy {
     }
     if ("deringing" in enabled) put("scale-antiring", (intensity("deringing", 70, 0..100) / 100.0).toString())
     if ("sharpening" in enabled) put("sharpen", if (constrained) "0" else (intensity("sharpening", 10, 0..30) / 100.0).toString())
-    put("interpolation", if ("interpolation" in enabled && !constrained) "yes" else "no")
+    // Prime the native display queue before enabling blending; no explicit FPS conversion.
     put("video-sync", if (enabled.any { it in setOf("interpolation", "resampling", "display_sync") } && !constrained) "display-resample" else "audio")
+    put("interpolation", if ("interpolation" in enabled && !constrained) "yes" else "no")
     if ("interpolation" in enabled && !constrained) put("tscale", "oversample")
     if ("tone_mapping" in enabled) put("tone-mapping", choice("tone_mapping", "auto"))
     if ("colour_management" in enabled) put("target-prim", choice("colour_management", "auto"))
