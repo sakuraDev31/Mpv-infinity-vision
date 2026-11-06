@@ -132,7 +132,7 @@ object DecoderPreferencesScreen : Screen {
         TopAppBar(
           title = {
             Text(
-              text = stringResource(R.string.pref_decoder),
+              text = "Decoder & Video Enhancement",
               style = MaterialTheme.typography.headlineSmall,
               fontWeight = FontWeight.ExtraBold,
               color = MaterialTheme.colorScheme.primary,
@@ -168,6 +168,21 @@ object DecoderPreferencesScreen : Screen {
               title = stringResource(R.string.pref_decoder),
               modifier = Modifier.settingsSearchTarget(R.string.pref_decoder),
             )
+          }
+
+          item {
+            PreferenceCard {
+              TextButton(onClick = { backstack.add(RexVisionPreferencesScreen) }, modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(8.dp)) {
+                  Text("REX Vision", style = MaterialTheme.typography.titleLarge)
+                  Text("Native enhancement pipeline · cinematic presets · device-aware controls")
+                }
+              }
+              PreferenceDivider()
+              TextButton(onClick = { backstack.add(DecoderInformationScreen) }, modifier = Modifier.fillMaxWidth()) {
+                Text("Decoder Information")
+              }
+            }
           }
 
           item {
