@@ -60,6 +60,42 @@ target_compile_options(qjs_runtime PRIVATE -funsigned-char)
 target_link_libraries(qjs_runtime dl m)
 mpvinfinity_optimize_native_target(qjs_runtime)
 
+
+# Neural frame-restoration inference. Build from source rather than using the stock
+# android-21 archive: our minSdk is 26, which is required by ncnn's AHardwareBuffer
+# import support. Vulkan capability is detected at runtime per device; CPU remains
+# available even when the Standard flavor is built with Vulkan enabled.
+option(MPVINFINITY_ENABLE_NCNN_RESTORATION "Build ncnn neural restoration JNI runtime" OFF)
+if(MPVINFINITY_ENABLE_NCNN_RESTORATION)
+    include(FetchContent)
+    set(NCNN_VULKAN ${MPVFLOW_ENABLE_VULKAN_BACKEND} CACHE BOOL "Build ncnn Vulkan backend" FORCE)
+    set(NCNN_OPENMP OFF CACHE BOOL "Use ncnn's internal thread scheduler" FORCE)
+    set(NCNN_BUILD_TOOLS OFF CACHE BOOL "Skip ncnn tools in Android app" FORCE)
+    set(NCNN_BUILD_EXAMPLES OFF CACHE BOOL "Skip ncnn examples in Android app" FORCE)
+    set(NCNN_BUILD_BENCHMARK OFF CACHE BOOL "Skip ncnn benchmark in Android app" FORCE)
+    set(NCNN_BUILD_TESTS OFF CACHE BOOL "Skip ncnn tests in Android app" FORCE)
+    set(NCNN_SHARED_LIB OFF CACHE BOOL "Link ncnn statically into the JNI library" FORCE)
+    set(NCNN_STRING ON CACHE BOOL "Use named input/output blobs from the model manifest" FORCE)
+    FetchContent_Declare(ncnn
+        GIT_REPOSITORY https://github.com/Tencent/ncnn.git
+        GIT_TAG 20261020
+        GIT_SHALLOW TRUE
+        GIT_SUBMODULES_RECURSE TRUE)
+    FetchContent_MakeAvailable(ncnn)
+
+    add_library(frame_restoration_ncnn SHARED frame_restoration_ncnn_jni.cpp)
+    set_target_properties(frame_restoration_ncnn PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON)
+    target_link_libraries(frame_restoration_ncnn PRIVATE ncnn android log)
+    target_compile_definitions(frame_restoration_ncnn PRIVATE NCNN_STRING=1)
+    if(MPVFLOW_ENABLE_VULKAN_BACKEND)
+        target_compile_definitions(frame_restoration_ncnn PRIVATE NCNN_VULKAN=1)
+        target_link_libraries(frame_restoration_ncnn PRIVATE vulkan)
+    endif()
+    mpvinfinity_optimize_native_target(frame_restoration_ncnn)
+endif()
+
 # Native Media3 shares the same clean-room motion pipeline as MPV Flow. Link
 # only to a verified libplacebo Vulkan API exported by the selected MPV AAR.
 option(MPVFLOW_ENABLE_VULKAN_BACKEND "Build the shared Vulkan Media3 Flow backend" OFF)

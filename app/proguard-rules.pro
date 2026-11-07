@@ -82,3 +82,6 @@
     java.lang.Object writeReplace();
     java.lang.Object readResolve();
 }
+
+# JNI entry points use the class and native method names as exported symbols.
+-keep class app.infinity.mpvz.domain.restoration.DrunetNcnnNative { *; }

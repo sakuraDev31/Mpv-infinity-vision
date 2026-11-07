@@ -59,33 +59,44 @@ jobs:
           echo "NCNN_LIBRARY=$LIBNCNN" >> "$GITHUB_ENV"
           echo "NCNN_ROOT=$RUNNER_TEMP/ncnn" >> "$GITHUB_ENV"
 
-      - name: Download and verify the MIT DRUNet student ONNX model
+      - name: Download and verify the MIT DRUNet student checkpoint
         run: |
           mkdir -p "$RUNNER_TEMP/drunet"
           curl --fail --location --retry 4 --retry-all-errors \
-            https://huggingface.co/seantempesta/remaster-drunet/resolve/main/drunet_student.onnx \
-            -o "$RUNNER_TEMP/drunet/drunet_student.onnx"
-          echo "b366ac68ed8e30a5d5a4db7776219ea3bd72929a81a53ef3b6f7e8fd0703206a  $RUNNER_TEMP/drunet/drunet_student.onnx" | sha256sum --check
-          "$RUNNER_TEMP/pnnx-venv/bin/python" - "$RUNNER_TEMP/drunet/drunet_student.onnx" <<'PY'
-          import collections, sys, onnx
-          model = onnx.load(sys.argv[1])
-          onnx.checker.check_model(model)
-          ops = collections.Counter(node.op_type for node in model.graph.node)
-          print("ONNX opset:", [(x.domain or "ai.onnx", x.version) for x in model.opset_import])
-          print("Inputs:", [(x.name, [d.dim_value or d.dim_param for d in x.type.tensor_type.shape.dim]) for x in model.graph.input])
-          print("Outputs:", [(x.name, [d.dim_value or d.dim_param for d in x.type.tensor_type.shape.dim]) for x in model.graph.output])
-          print("Operators:", dict(sorted(ops.items())))
-          assert len(model.graph.input) == 1 and model.graph.input[0].name == "input"
-          assert len(model.graph.output) == 1 and model.graph.output[0].name == "output"
+            https://huggingface.co/seantempesta/remaster-drunet/resolve/main/drunet_student.pth \
+            -o "$RUNNER_TEMP/drunet/drunet_student.pth"
+          echo "21ee495de84de866d91af7c78e58cf8d1d68dc1d9016dd8e38f65f3a0559861e  $RUNNER_TEMP/drunet/drunet_student.pth" | sha256sum --check
+          git clone --depth 1 https://github.com/seantempesta/remaster.git "$RUNNER_TEMP/remaster-source"
+          git -C "$RUNNER_TEMP/remaster-source" submodule update --init --depth 1 reference-code/KAIR
+          python - "$RUNNER_TEMP/remaster-source" "$RUNNER_TEMP/drunet/drunet_student.pth" "$RUNNER_TEMP/drunet/drunet_student.pt" <<'PY'
+          import os, sys, torch
+          project, checkpoint, output = sys.argv[1:]
+          sys.path.insert(0, project)
+          from lib.paths import add_kair_to_path
+          add_kair_to_path()
+          from models.network_unet import UNetRes
+          torch.set_num_threads(1)
+          state = torch.load(checkpoint, map_location="cpu", weights_only=True)
+          state = state.get("params", state.get("model", state))
+          model = UNetRes(in_nc=3, out_nc=3, nc=[16, 32, 64, 128], nb=2, act_mode="R", bias=False)
+          model.load_state_dict(state, strict=True)
+          model.eval().half()
+          sample = torch.zeros((1, 3, 128, 128), dtype=torch.float16)
+          with torch.inference_mode():
+              out = model(sample)
+          assert tuple(out.shape) == (1, 3, 128, 128), tuple(out.shape)
+          traced = torch.jit.trace(model, sample, strict=False, check_trace=False)
+          torch.jit.save(traced, output)
+          print("TorchScript student model exported:", tuple(out.shape), "FP16", os.path.getsize(output), "bytes")
           PY
 
-      - name: Convert ONNX to ncnn and smoke-test the graph
+      - name: Convert TorchScript to ncnn and smoke-test the graph
         run: |
           mkdir -p "$RUNNER_TEMP/drunet/converted"
           cd "$RUNNER_TEMP/drunet/converted"
-          # The upstream ONNX is an FP16 dynamic-shape export. Match its traced I/O contract;
-          # the first run is a 128x128 CPU smoke test and PNNX also traces 512x512 as an alternate shape.
-          "$PNNX_CONVERTER" "$RUNNER_TEMP/drunet/drunet_student.onnx" \
+          # Convert the model directly from the upstream architecture's TorchScript trace;
+          # PNNX's ONNX path leaves dynamic height/width unresolved for this export.
+          "$PNNX_CONVERTER" "$RUNNER_TEMP/drunet/drunet_student.pt" \
             inputshape=[1,3,128,128]f16 inputshape2=[1,3,512,512]f16 fp16=1 optlevel=2
           test -s "$RUNNER_TEMP/drunet/converted/drunet_student.ncnn.param"
           test -s "$RUNNER_TEMP/drunet/converted/drunet_student.ncnn.bin"
@@ -107,29 +118,54 @@ jobs:
           mkdir -p "$MODEL_DIR"
           cp "$RUNNER_TEMP/drunet/converted/drunet_student.ncnn.param" "$MODEL_DIR/drunet_student.param"
           cp "$RUNNER_TEMP/drunet/converted/drunet_student.ncnn.bin" "$MODEL_DIR/drunet_student.bin"
-          cp "$RUNNER_TEMP/drunet/converted/SHA256SUMS" "$MODEL_DIR/"
-          cat > "$MODEL_DIR/model.json" <<'JSON'
-          {
-            "id": "remaster-drunet-student",
-            "name": "Remaster DRUNet Student",
-            "license": "MIT",
-            "source": "https://huggingface.co/seantempesta/remaster-drunet",
-            "source_file": "drunet_student.onnx",
-            "source_sha256": "b366ac68ed8e30a5d5a4db7776219ea3bd72929a81a53ef3b6f7e8fd0703206a",
-            "runtime": "ncnn",
-            "input_blob": "input",
-            "output_blob": "output",
-            "input_layout": "NCHW",
-            "input_range": "RGB float16 0..1",
-            "output_range": "RGB float16/float32 0..1 (runtime graph dtype)",
-            "input_type": "float16",
-            "traced_shapes": [[1, 3, 128, 128], [1, 3, 512, 512]],
-            "scale": 1,
-            "spatial_multiple": 8,
-            "kind": "single-frame video-compression restoration",
-            "note": "Model card reports training on 1080p HEVC video. Does not by itself guarantee real-time playback on mobile GPUs."
+          (cd "$MODEL_DIR" && sha256sum drunet_student.param drunet_student.bin > SHA256SUMS)
+          python3 - "$MODEL_DIR/drunet_student.param" "$MODEL_DIR/model.json" <<'PY'
+          import json, sys
+          param_path, output_path = sys.argv[1:]
+          lines = [line.strip() for line in open(param_path, encoding="utf-8") if line.strip() and not line.lstrip().startswith("#")]
+          layers = []
+          for line in lines[2:]:
+              fields = line.split()
+              if len(fields) < 4:
+                  continue
+              try:
+                  bottom_count, top_count = int(fields[2]), int(fields[3])
+              except ValueError:
+                  continue
+              start = 4
+              bottoms = fields[start:start + bottom_count]
+              tops = fields[start + bottom_count:start + bottom_count + top_count]
+              if len(bottoms) == bottom_count and len(tops) == top_count and top_count:
+                  layers.append((fields[0], tops))
+          input_blob = next((tops[0] for kind, tops in layers if kind == "Input"), None)
+          output_blob = layers[-1][1][-1] if layers else None
+          if not input_blob or not output_blob:
+              raise SystemExit("Could not derive ncnn input/output blob names from generated param file")
+          model = {
+              "id": "remaster-drunet-student",
+              "name": "Remaster DRUNet Student",
+              "license": "MIT",
+              "source": "https://huggingface.co/seantempesta/remaster-drunet",
+              "source_file": "drunet_student.pth",
+              "source_sha256": "21ee495de84de866d91af7c78e58cf8d1d68dc1d9016dd8e38f65f3a0559861e",
+              "runtime": "ncnn",
+              "input_blob": input_blob,
+              "output_blob": output_blob,
+              "input_layout": "NCHW",
+              "input_type": "float16",
+              "input_range": "RGB float16 0..1",
+              "output_range": "RGB float16/float32 0..1 (runtime graph dtype)",
+              "traced_shapes": [[1, 3, 128, 128], [1, 3, 512, 512]],
+              "scale": 1,
+              "spatial_multiple": 8,
+              "kind": "single-frame video-compression restoration",
+              "note": "Model card reports training on 1080p HEVC video. Does not by itself guarantee real-time playback on mobile GPUs."
           }
-          JSON
+          with open(output_path, "w", encoding="utf-8") as out:
+              json.dump(model, out, indent=2)
+              out.write("\n")
+          print("Generated model metadata:", input_blob, "->", output_blob)
+          PY
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "$MODEL_DIR"

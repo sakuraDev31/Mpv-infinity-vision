@@ -87,6 +87,7 @@ android {
       externalNativeBuild {
         cmake {
           arguments += "-DMPVFLOW_ENABLE_VULKAN_BACKEND=ON"
+          arguments += "-DMPVINFINITY_ENABLE_NCNN_RESTORATION=ON"
           arguments += "-DMPVFLOW_MPV_AAR=${projectDir}/libs/mpvlib.aar"
         }
       }
@@ -102,6 +103,7 @@ android {
       externalNativeBuild {
         cmake {
           arguments += "-DMPVFLOW_ENABLE_VULKAN_BACKEND=OFF"
+          arguments += "-DMPVINFINITY_ENABLE_NCNN_RESTORATION=ON"
         }
       }
     }
