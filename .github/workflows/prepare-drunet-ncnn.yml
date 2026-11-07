@@ -1,0 +1,130 @@
+name: Prepare DRUNet ncnn model
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prepare-drunet-ncnn-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  convert-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 1
+
+      - name: Install ONNX converter build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build g++ git libprotobuf-dev protobuf-compiler python3-pip python3-venv
+
+      - name: Build pinned ncnn ONNX converter
+        env:
+          NCNN_TAG: 20261020
+        run: |
+          git clone --depth 1 --branch "$NCNN_TAG" https://github.com/Tencent/ncnn.git "$RUNNER_TEMP/ncnn"
+          cmake -S "$RUNNER_TEMP/ncnn" -B "$RUNNER_TEMP/ncnn-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DNCNN_VULKAN=OFF \
+            -DNCNN_OPENMP=OFF \
+            -DNCNN_BUILD_TOOLS=ON \
+            -DNCNN_BUILD_EXAMPLES=OFF \
+            -DNCNN_BUILD_BENCHMARK=OFF \
+            -DNCNN_BUILD_TESTS=OFF \
+            -DNCNN_BUILD_SHARED_LIBS=OFF
+          cmake --build "$RUNNER_TEMP/ncnn-build" --target onnx2ncnn ncnn --parallel 2
+          CONVERTER="$(find "$RUNNER_TEMP/ncnn-build" -type f -name onnx2ncnn -executable -print -quit)"
+          LIBNCNN="$(find "$RUNNER_TEMP/ncnn-build" -type f -name 'libncnn.a' -print -quit)"
+          test -n "$CONVERTER"
+          test -n "$LIBNCNN"
+          echo "NCNN_CONVERTER=$CONVERTER" >> "$GITHUB_ENV"
+          echo "NCNN_ROOT=$RUNNER_TEMP/ncnn" >> "$GITHUB_ENV"
+          echo "NCNN_LIBRARY=$LIBNCNN" >> "$GITHUB_ENV"
+          "$CONVERTER" 2>&1 | head -n 8 || true
+
+      - name: Download and verify the MIT DRUNet student ONNX model
+        run: |
+          mkdir -p "$RUNNER_TEMP/drunet"
+          curl --fail --location --retry 4 --retry-all-errors \
+            https://huggingface.co/seantempesta/remaster-drunet/resolve/main/drunet_student.onnx \
+            -o "$RUNNER_TEMP/drunet/drunet_student.onnx"
+          echo "b366ac68ed8e30a5d5a4db7776219ea3bd72929a81a53ef3b6f7e8fd0703206a  $RUNNER_TEMP/drunet/drunet_student.onnx" | sha256sum --check
+          python3 -m pip install --break-system-packages --quiet onnx==1.20.1
+          python3 - "$RUNNER_TEMP/drunet/drunet_student.onnx" <<'PY'
+          import collections, sys, onnx
+          model = onnx.load(sys.argv[1])
+          onnx.checker.check_model(model)
+          ops = collections.Counter(node.op_type for node in model.graph.node)
+          print("ONNX opset:", [(x.domain or "ai.onnx", x.version) for x in model.opset_import])
+          print("Inputs:", [(x.name, [d.dim_value or d.dim_param for d in x.type.tensor_type.shape.dim]) for x in model.graph.input])
+          print("Outputs:", [(x.name, [d.dim_value or d.dim_param for d in x.type.tensor_type.shape.dim]) for x in model.graph.output])
+          print("Operators:", dict(sorted(ops.items())))
+          assert len(model.graph.input) == 1 and model.graph.input[0].name == "input"
+          assert len(model.graph.output) == 1 and model.graph.output[0].name == "output"
+          PY
+
+      - name: Convert ONNX to ncnn and smoke-test the graph
+        run: |
+          mkdir -p "$RUNNER_TEMP/drunet/converted"
+          "$NCNN_CONVERTER" \
+            "$RUNNER_TEMP/drunet/drunet_student.onnx" \
+            "$RUNNER_TEMP/drunet/converted/drunet_student.param" \
+            "$RUNNER_TEMP/drunet/converted/drunet_student.bin"
+          test -s "$RUNNER_TEMP/drunet/converted/drunet_student.param"
+          test -s "$RUNNER_TEMP/drunet/converted/drunet_student.bin"
+          g++ -O2 -std=c++17 \
+            -I"$NCNN_ROOT/src" \
+            "$GITHUB_WORKSPACE/tools/neural_model_smoke.cpp" \
+            "$NCNN_LIBRARY" -pthread -ldl -lm \
+            -o "$RUNNER_TEMP/drunet/ncnn-model-smoke"
+          "$RUNNER_TEMP/drunet/ncnn-model-smoke" \
+            "$RUNNER_TEMP/drunet/converted/drunet_student.param" \
+            "$RUNNER_TEMP/drunet/converted/drunet_student.bin"
+          sha256sum "$RUNNER_TEMP/drunet/converted/drunet_student.param" "$RUNNER_TEMP/drunet/converted/drunet_student.bin" > "$RUNNER_TEMP/drunet/converted/SHA256SUMS"
+          cat "$RUNNER_TEMP/drunet/converted/SHA256SUMS"
+
+      - name: Publish verified ncnn model files to the current branch
+        env:
+          MODEL_DIR: app/src/main/assets/ai/restoration/remaster_drunet
+        run: |
+          mkdir -p "$MODEL_DIR"
+          cp "$RUNNER_TEMP/drunet/converted/drunet_student.param" "$MODEL_DIR/"
+          cp "$RUNNER_TEMP/drunet/converted/drunet_student.bin" "$MODEL_DIR/"
+          cp "$RUNNER_TEMP/drunet/converted/SHA256SUMS" "$MODEL_DIR/"
+          cat > "$MODEL_DIR/model.json" <<'JSON'
+          {
+            "id": "remaster-drunet-student",
+            "name": "Remaster DRUNet Student",
+            "license": "MIT",
+            "source": "https://huggingface.co/seantempesta/remaster-drunet",
+            "source_file": "drunet_student.onnx",
+            "source_sha256": "b366ac68ed8e30a5d5a4db7776219ea3bd72929a81a53ef3b6f7e8fd0703206a",
+            "runtime": "ncnn",
+            "input_blob": "input",
+            "output_blob": "output",
+            "input_layout": "NCHW",
+            "input_range": "RGB float32 0..1",
+            "output_range": "RGB float32 0..1",
+            "scale": 1,
+            "spatial_multiple": 8,
+            "kind": "single-frame video-compression restoration",
+            "note": "Model card reports training on 1080p HEVC video. Does not by itself guarantee real-time playback on mobile GPUs."
+          }
+          JSON
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$MODEL_DIR"
+          if git diff --cached --quiet; then
+            echo "Verified model files are already current."
+          else
+            git commit -m "Add verified Remaster DRUNet ncnn model"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
