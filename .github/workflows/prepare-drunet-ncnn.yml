@@ -2,6 +2,11 @@ name: Prepare DRUNet ncnn model
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - genspark_ai_developer
+    paths:
+      - ".github/workflows/prepare-drunet-ncnn.yml"
 
 permissions:
   contents: write
