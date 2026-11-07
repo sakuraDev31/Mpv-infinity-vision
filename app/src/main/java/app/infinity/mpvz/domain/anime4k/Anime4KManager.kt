@@ -9,6 +9,7 @@ package app.infinity.mpvz.domain.anime4k
 
 import android.content.Context
 import java.io.File
+import java.util.Locale
 
 /**
  * Anime4K Manager
@@ -410,6 +411,35 @@ class Anime4KManager(
    * Get shader chain for the specified mode and quality
    * Returns empty string if mode is OFF or initialization failed
    */
+  /** Build a same-resolution CNN restoration shader with a strength-scaled learned residual. */
+  @Synchronized
+  fun getFrameRestorationShaderFile(
+    profile: FrameRestorationProfile,
+    strength: Int,
+  ): File? {
+    val normalizedStrength = normalizeFrameRestorationStrength(strength)
+    if (normalizedStrength <= 0 || (!isInitialized && !initialize())) return null
+    val directory = shaderDir ?: return null
+    val original = File(directory, profile.shaderFileName)
+    if (!original.isFile || original.length() <= 0L) return null
+    val generated = File(
+      directory,
+      "FrameRestore_${profile.name}_${String.format(Locale.US, "%03d", normalizedStrength)}.glsl",
+    )
+    if (generated.isFile && generated.length() > 0L) return generated
+    return runCatching {
+      val transformed = scaleFrameRestorationResidual(original.readText(), normalizedStrength)
+        ?: return null
+      val temporary = File(directory, generated.name + ".tmp")
+      temporary.writeText(transformed)
+      if (!temporary.renameTo(generated)) {
+        temporary.copyTo(generated, overwrite = true)
+        temporary.delete()
+      }
+      generated.takeIf { it.isFile && it.length() > 0L }
+    }.getOrNull()
+  }
+
   fun getShaderChain(
     mode: Mode,
     quality: Quality,

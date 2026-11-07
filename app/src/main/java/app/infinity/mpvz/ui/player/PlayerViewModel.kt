@@ -68,6 +68,8 @@ import app.infinity.mpvz.repository.wyzie.WyzieSearchRepository
 import app.infinity.mpvz.ui.player.ScriptCurlBridge
 import app.infinity.mpvz.ui.player.anime4k.Anime4KUiState
 import app.infinity.mpvz.ui.player.anime4k.applyAnime4KShaderChain
+import app.infinity.mpvz.ui.player.anime4k.applyFrameRestorationShader
+import app.infinity.mpvz.ui.player.anime4k.clearFrameRestorationShader
 import app.infinity.mpvz.ui.player.anime4k.applyAnime4KStabilityOptions
 import app.infinity.mpvz.ui.player.anime4k.clearAnime4KShaders
 import app.infinity.mpvz.ui.player.anime4k.selectRuntimeStableAnime4K
@@ -136,6 +138,13 @@ import kotlin.math.roundToInt
 import kotlin.properties.ReadOnlyProperty
 import kotlin.random.Random
 import kotlin.reflect.KProperty
+
+private data class RestorationSettings(
+  val enabled: Boolean,
+  val profile: app.infinity.mpvz.domain.anime4k.FrameRestorationProfile,
+  val strength: Int,
+  val anime4kOwnsReconstruction: Boolean,
+)
 
 enum class AutoCropState {
   IDLE,
@@ -1832,6 +1841,55 @@ class PlayerViewModel(
   )
 
   init {
+    if (!hostedInBrowser) {
+      // The restoration controls live in Decoder settings, so observe their persisted values
+      // here and apply them only when an MPV GPU renderer owns an active video surface.
+      viewModelScope.launch(Dispatchers.Default) {
+        val restorationSettings = combine(
+          decoderPreferences.frameRestorationEnabled.changes(),
+          decoderPreferences.frameRestorationProfile.changes(),
+          decoderPreferences.frameRestorationStrength.changes(),
+          decoderPreferences.enableAnime4K.changes(),
+          decoderPreferences.anime4kMode.changes(),
+        ) { enabled, profile, strength, anime4kEnabled, anime4kMode ->
+          RestorationSettings(
+            enabled = enabled,
+            profile = profile,
+            strength = strength,
+            anime4kOwnsReconstruction = anime4kEnabled && anime4kMode != Anime4KManager.Mode.OFF.name,
+          )
+        }
+        val playback = combine(
+          PlaybackSession.state,
+          PlaybackSession.propInt["video-params/w"],
+        ) { state, width -> state to (width ?: 0) }
+        combine(restorationSettings, playback) { settings, active -> settings to active }
+          .distinctUntilChanged()
+          .collect { (settings, active) ->
+            val (session, sourceWidth) = active
+            if (!PlaybackSession.isInitialized) return@collect
+            val activeMpvVideo = session.phase == PlaybackPhase.READY || session.phase == PlaybackPhase.BACKGROUND
+            val nativeRendererActive = hostReference.get()?.isNativeEngineActive() == true
+            if (
+              !settings.enabled || settings.anime4kOwnsReconstruction || !activeMpvVideo ||
+              sourceWidth <= 0 || nativeRendererActive
+            ) {
+              clearFrameRestorationShader()
+              return@collect
+            }
+            val renderer = PlaybackSession.getPropertyString("current-vo")
+              ?: PlaybackSession.getPropertyString("vo")
+            if (renderer != "gpu" && renderer != "gpu-next") {
+              clearFrameRestorationShader()
+              Log.i(TAG, "Frame restoration skipped: unsupported MPV renderer '$renderer'")
+              return@collect
+            }
+            if (!applyFrameRestorationShader(anime4kManager, settings.profile, settings.strength)) {
+              Log.w(TAG, "Frame restoration shader was not accepted by MPV (${settings.profile}, ${settings.strength}%)")
+            }
+          }
+      }
+    }
     if (!hostedInBrowser) {
     viewModelScope.launch {
       decoderPreferences.gpuNext.changes().collect { enabled ->

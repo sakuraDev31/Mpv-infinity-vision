@@ -31,6 +31,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import app.infinity.mpvz.ui.preferences.components.SettingsScaffold as Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import app.infinity.mpvz.ui.preferences.components.SettingsTopAppBar as TopAppBar
@@ -49,9 +50,11 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import app.infinity.mpvz.BuildConfig
 import app.infinity.mpvz.R
 import app.infinity.mpvz.domain.anime4k.Anime4KManager
+import app.infinity.mpvz.domain.anime4k.FrameRestorationProfile
 import app.infinity.mpvz.preferences.AdvancedPreferences
 import app.infinity.mpvz.preferences.DecoderPreferences
 import app.infinity.mpvz.preferences.MPVFLOW_TARGET_FPS_OPTIONS
@@ -458,6 +461,58 @@ object DecoderPreferencesScreen : Screen {
               )
 
               PreferenceDivider()
+
+              val frameRestorationEnabled by preferences.frameRestorationEnabled.collectAsState()
+              val frameRestorationProfile by preferences.frameRestorationProfile.collectAsState()
+              val frameRestorationStrength by preferences.frameRestorationStrength.collectAsState()
+              Text(
+                "CNN Frame Restoration (Experimental)",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+              )
+              SwitchPreference(
+                modifier = Modifier.padding(horizontal = 4.dp),
+                value = frameRestorationEnabled,
+                enabled = !shadersConfigOwned && !anime4kActivePreference,
+                onValueChange = preferences.frameRestorationEnabled::set,
+                title = { Text("Enable frame restoration") },
+                summary = {
+                  Text(
+                    "GPU CNN residual restoration at source resolution. It is separate from Anime4K upscaling and currently uses Anime4K-trained weights; test carefully on live-action HEVC.",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+              if (frameRestorationEnabled) {
+                PreferenceDivider()
+                ListPreference(
+                  value = frameRestorationProfile,
+                  onValueChange = preferences.frameRestorationProfile::set,
+                  values = FrameRestorationProfile.entries,
+                  enabled = !shadersConfigOwned && !anime4kActivePreference,
+                  valueToText = { AnnotatedString(it.title) },
+                  title = { Text("Processing profile") },
+                  summary = { Text(frameRestorationProfile.summary, color = MaterialTheme.colorScheme.outline) },
+                )
+                PreferenceDivider()
+                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                  Text("Restoration strength: $frameRestorationStrength%", style = MaterialTheme.typography.titleSmall)
+                  Slider(
+                    value = frameRestorationStrength.coerceIn(0, 100).toFloat(),
+                    onValueChange = { preferences.frameRestorationStrength.set((it / 5f).roundToInt() * 5) },
+                    valueRange = 0f..100f,
+                    steps = 19,
+                    enabled = !shadersConfigOwned && !anime4kActivePreference,
+                  )
+                  Text(
+                    "Strength scales the CNN-predicted residual; 0% disables the pass. This is not bitrate or source bit-depth conversion.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                }
+                PreferenceDivider()
+              }
 
               val enableAnime4K by preferences.enableAnime4K.collectAsState()
               SwitchPreference(

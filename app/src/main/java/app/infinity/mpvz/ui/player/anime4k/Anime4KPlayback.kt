@@ -105,8 +105,41 @@ private data class VideoGeometrySnapshot(
 
 internal fun clearAnime4KShaders() {
   withPreservedVideoGeometry {
-    setShaderList(currentShaderList().filterNot(::isBuiltInAnime4KShaderPath))
+    setShaderList(currentShaderList().filterNot { isBuiltInAnime4KShaderPath(it) || isFrameRestorationShaderPath(it) })
   }
+}
+
+/** Apply only the same-resolution CNN restoration pass; preserve every unrelated shader. */
+internal fun applyFrameRestorationShader(
+  anime4kManager: Anime4KManager,
+  profile: app.infinity.mpvz.domain.anime4k.FrameRestorationProfile,
+  strength: Int,
+): Boolean {
+  if (!PlaybackSession.isInitialized) return false
+  val renderer = PlaybackSession.getPropertyString("current-vo")
+    ?: PlaybackSession.getPropertyString("vo")
+  if (renderer != "gpu" && renderer != "gpu-next") return false
+  if (strength <= 0) {
+    clearFrameRestorationShader()
+    return true
+  }
+  val shader = anime4kManager.getFrameRestorationShaderFile(profile, strength) ?: return false
+  val path = shader.absolutePath
+  val original = currentShaderList()
+  val next = listOf(path) + original.filterNot(::isFrameRestorationShaderPath)
+  val applied = setShaderList(next)
+  if (!applied) {
+    // Roll back the complete prior chain when MPV does not acknowledge the update.
+    setShaderList(original)
+  }
+  return applied
+}
+
+internal fun clearFrameRestorationShader() {
+  if (!PlaybackSession.isInitialized) return
+  val original = currentShaderList()
+  val retained = original.filterNot(::isFrameRestorationShaderPath)
+  if (retained != original) setShaderList(retained)
 }
 
 internal fun applyAnime4KShaderChain(
@@ -123,11 +156,13 @@ internal fun applyAnime4KShaderChain(
     return false
   }
 
+  var applied = false
   withPreservedVideoGeometry {
     val retainedShaders = currentShaderList().filterNot(::isBuiltInAnime4KShaderPath)
-    setShaderList(shaderPaths + retainedShaders)
+      .filterNot(::isFrameRestorationShaderPath)
+    applied = setShaderList(shaderPaths + retainedShaders)
   }
-  return true
+  return applied
 }
 
 internal fun applyAnime4KStabilityOptions(useVulkan: Boolean) {
@@ -141,8 +176,11 @@ internal fun applyAnime4KStabilityOptions(useVulkan: Boolean) {
 
 private inline fun withPreservedVideoGeometry(block: () -> Unit) {
   val snapshot = captureVideoGeometry()
-  block()
-  restoreVideoGeometry(snapshot)
+  try {
+    block()
+  } finally {
+    restoreVideoGeometry(snapshot)
+  }
 }
 
 private fun captureVideoGeometry(): VideoGeometrySnapshot =
@@ -198,9 +236,18 @@ private fun currentShaderList(): List<String> =
     ?.filter { it.isNotEmpty() }
     .orEmpty()
 
-private fun setShaderList(shaderPaths: List<String>) {
-  PlaybackSession.setPropertyString("glsl-shaders", shaderPaths.joinToString(":"))
+private fun setShaderList(shaderPaths: List<String>): Boolean {
+  val expected = shaderPaths.joinToString(":")
+  return runCatching {
+    PlaybackSession.setPropertyString("glsl-shaders", expected)
+    val actual = PlaybackSession.getPropertyString("glsl-shaders")
+      ?.split(":")?.map(String::trim)?.filter(String::isNotEmpty).orEmpty()
+    actual == shaderPaths
+  }.getOrDefault(false)
 }
+
+private fun isFrameRestorationShaderPath(path: String): Boolean =
+  path.replace('\\', '/').substringAfterLast('/').startsWith("FrameRestore_")
 
 private fun isBuiltInAnime4KShaderPath(path: String): Boolean {
   val normalized = path.replace('\\', '/')

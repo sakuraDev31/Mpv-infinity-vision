@@ -8,6 +8,7 @@
 package app.infinity.mpvz.preferences
 
 import app.infinity.mpvz.domain.anime4k.Anime4KManager
+import app.infinity.mpvz.domain.anime4k.FrameRestorationProfile
 import app.infinity.mpvz.preferences.preference.PreferenceStore
 import app.infinity.mpvz.preferences.preference.getEnum
 import app.infinity.mpvz.ui.player.Debanding
@@ -103,6 +104,11 @@ class DecoderPreferences(
   val contrastFilter = preferenceStore.getInt("filter_contrast")
   val hueFilter = preferenceStore.getInt("filter_hue")
   val sharpnessFilter = preferenceStore.getInt("filter_sharpness")
+
+  // Frame restoration preferences (GPU CNN shader prototype; separate from Anime4K upscaling).
+  val frameRestorationEnabled = preferenceStore.getBoolean("frame_restoration_enabled", false)
+  val frameRestorationProfile = preferenceStore.getEnum("frame_restoration_profile", FrameRestorationProfile.BALANCED)
+  val frameRestorationStrength = preferenceStore.getInt("frame_restoration_strength", 70)
 
   // Anime4K Preferences
   val enableAnime4K = preferenceStore.getBoolean("enable_anime4k", false)
