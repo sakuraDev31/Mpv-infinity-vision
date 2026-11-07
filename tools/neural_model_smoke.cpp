@@ -70,14 +70,21 @@ int main(int argc, char** argv) {
     }
 
     // The model card specifies RGB NCHW float32 in [0, 1] and dimensions divisible by eight.
-    constexpr int width = 64;
-    constexpr int height = 64;
-    ncnn::Mat input(width, height, 3);
+    constexpr int width = 128;
+    constexpr int height = 128;
+    // The published ONNX export has FP16 input tensors; ncnn Mat accepts 16-bit
+    // elements directly. Keep values normalized to the model's documented [0, 1] range.
+    ncnn::Mat input(width, height, 3, sizeof(unsigned short));
+    if (input.empty()) {
+        std::fprintf(stderr, "could not allocate FP16 input tensor\n");
+        return 16;
+    }
     for (int c = 0; c < input.c; ++c) {
-        float* plane = input.channel(c);
+        unsigned short* plane = static_cast<unsigned short*>(input.channel(c));
         for (int y = 0; y < height; ++y) {
             for (int x = 0; x < width; ++x) {
-                plane[y * width + x] = 0.15f + 0.1f * static_cast<float>((x + y + c) % 7) / 6.0f;
+                const float value = 0.15f + 0.1f * static_cast<float>((x + y + c) % 7) / 6.0f;
+                plane[y * width + x] = ncnn::float32_to_float16(value);
             }
         }
     }
@@ -93,20 +100,25 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "ncnn output extraction failed: %s\n", outputBlob.c_str());
         return 13;
     }
-    if (output.empty() || output.w != width || output.h != height || output.c != 3 || output.elemsize != sizeof(float)) {
+    if (output.empty() || output.w != width || output.h != height || output.c != 3 ||
+        (output.elemsize != sizeof(float) && output.elemsize != sizeof(unsigned short))) {
         std::fprintf(stderr, "unexpected output shape/type: %d x %d x %d, elemsize=%zu\n",
                      output.w, output.h, output.c, output.elemsize);
         return 14;
     }
-    const float* values = static_cast<const float*>(output.data);
     const size_t count = output.total() * output.elempack;
+    float firstValue = 0.f;
     for (size_t i = 0; i < count; ++i) {
-        if (!std::isfinite(values[i])) {
+        const float value = output.elemsize == sizeof(unsigned short)
+            ? ncnn::float16_to_float32(static_cast<const unsigned short*>(output.data)[i])
+            : static_cast<const float*>(output.data)[i];
+        if (!std::isfinite(value)) {
             std::fprintf(stderr, "non-finite model output at %zu\n", i);
             return 15;
         }
+        if (i == 0) firstValue = value;
     }
-    std::printf("DRUNet ncnn smoke test passed: input=%s output=%s shape=%d x %d x %d float32 first=%0.6f\n",
-                inputBlob.c_str(), outputBlob.c_str(), output.w, output.h, output.c, values[0]);
+    std::printf("DRUNet ncnn smoke test passed: input=%s output=%s shape=%d x %d x %d elem=%zu first=%0.6f\n",
+                inputBlob.c_str(), outputBlob.c_str(), output.w, output.h, output.c, output.elemsize, firstValue);
     return 0;
 }
