@@ -124,6 +124,7 @@ jobs:
           test -s "$RUNNER_TEMP/drunet/converted/drunet_student.ncnn.bin"
           g++ -O2 -std=c++17 \
             -I"$NCNN_ROOT/src" \
+            -I"$(dirname "$NCNN_LIBRARY")" \
             "$GITHUB_WORKSPACE/tools/neural_model_smoke.cpp" \
             "$NCNN_LIBRARY" -pthread -ldl -lm \
             -o "$RUNNER_TEMP/drunet/ncnn-model-smoke"
