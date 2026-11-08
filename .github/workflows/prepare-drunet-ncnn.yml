@@ -48,11 +48,21 @@ jobs:
           echo "PNNX_CONVERTER=$RUNNER_TEMP/pnnx-venv/bin/pnnx" >> "$GITHUB_ENV"
           echo "MODEL_PYTHON=$RUNNER_TEMP/pnnx-venv/bin/python" >> "$GITHUB_ENV"
 
+      - name: Cache pinned CPU ncnn source and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/ncnn
+            ${{ runner.temp }}/ncnn-build
+          key: ${{ runner.os }}-ubuntu24-ncnn-20261020-cpu-release-v1
+
       - name: Build pinned CPU ncnn library for conversion smoke test
         env:
           NCNN_TAG: 20261020
         run: |
-          git clone --depth 1 --branch "$NCNN_TAG" https://github.com/Tencent/ncnn.git "$RUNNER_TEMP/ncnn"
+          if [ ! -d "$RUNNER_TEMP/ncnn/.git" ]; then
+            git clone --depth 1 --branch "$NCNN_TAG" https://github.com/Tencent/ncnn.git "$RUNNER_TEMP/ncnn"
+          fi
           git -C "$RUNNER_TEMP/ncnn" submodule update --init --recursive
           cmake -S "$RUNNER_TEMP/ncnn" -B "$RUNNER_TEMP/ncnn-build" -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
@@ -89,14 +99,16 @@ jobs:
           state = state.get("params", state.get("model", state))
           model = UNetRes(in_nc=3, out_nc=3, nc=[16, 32, 64, 128], nb=2, act_mode="R", bias=False)
           model.load_state_dict(state, strict=True)
-          model.eval().half()
-          sample = torch.zeros((1, 3, 128, 128), dtype=torch.float16)
+          # Keep the traced graph input FP32. PNNX stores weights in FP16,
+          # while the Android staging API supplies normalized FP32 tensors.
+          model.eval().float()
+          sample = torch.zeros((1, 3, 128, 128), dtype=torch.float32)
           with torch.inference_mode():
               out = model(sample)
           assert tuple(out.shape) == (1, 3, 128, 128), tuple(out.shape)
           traced = torch.jit.trace(model, sample, strict=False, check_trace=False)
           torch.jit.save(traced, output)
-          print("TorchScript student model exported:", tuple(out.shape), "FP16", os.path.getsize(output), "bytes")
+          print("TorchScript student model exported:", tuple(out.shape), "FP32 input", os.path.getsize(output), "bytes")
           PY
 
       - name: Convert TorchScript to ncnn and smoke-test the graph
@@ -106,7 +118,7 @@ jobs:
           # Convert the model directly from the upstream architecture's TorchScript trace;
           # PNNX's ONNX path leaves dynamic height/width unresolved for this export.
           "$PNNX_CONVERTER" "$RUNNER_TEMP/drunet/drunet_student.pt" \
-            inputshape=[1,3,128,128]f16 inputshape2=[1,3,512,512]f16 fp16=1 optlevel=2
+            inputshape=[1,3,128,128] inputshape2=[1,3,512,512] fp16=1 optlevel=2
           test -s "$RUNNER_TEMP/drunet/converted/drunet_student.ncnn.param"
           test -s "$RUNNER_TEMP/drunet/converted/drunet_student.ncnn.bin"
           g++ -O2 -std=c++17 \
@@ -161,8 +173,8 @@ jobs:
               "input_blob": input_blob,
               "output_blob": output_blob,
               "input_layout": "NCHW",
-              "input_type": "float16",
-              "input_range": "RGB float16 0..1",
+              "input_type": "float32",
+              "input_range": "RGB float32 0..1",
               "output_range": "RGB float16/float32 0..1 (runtime graph dtype)",
               "traced_shapes": [[1, 3, 128, 128], [1, 3, 512, 512]],
               "scale": 1,

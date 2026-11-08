@@ -200,7 +200,7 @@ Java_app_infinity_mpvz_domain_restoration_DrunetNcnnNative_nativeBackendName(JNI
 
 /**
  * One-frame staging API for correctness/latency validation.
- * Input/output are direct RGBA8 SDR buffers; the model consumes normalized RGB FP16.
+ * Input/output are direct RGBA8 SDR buffers; the model consumes normalized RGB FP32.
  * This is intentionally not connected to a playback Surface yet: a GPU readback path must
  * first be benchmarked and replaced by AHardwareBuffer import/export where supported.
  * Returns elapsed microseconds, or a negative error code.
@@ -225,18 +225,18 @@ Java_app_infinity_mpvz_domain_restoration_DrunetNcnnNative_nativeProcessRgba(
     const auto started = std::chrono::steady_clock::now();
     const int padded_width = (width + 7) & ~7;
     const int padded_height = (height + 7) & ~7;
-    ncnn::Mat input(padded_width, padded_height, 3, sizeof(unsigned short));
+    ncnn::Mat input(padded_width, padded_height, 3, sizeof(float));
     if (input.empty()) return -6;
 
     for (int c = 0; c < 3; ++c) {
-        auto* plane = static_cast<unsigned short*>(input.channel(c));
+        auto* plane = static_cast<float*>(input.channel(c));
         for (int y = 0; y < padded_height; ++y) {
             const int source_y = std::min(y, height - 1);
             for (int x = 0; x < padded_width; ++x) {
                 const int source_x = std::min(x, width - 1);
                 const size_t offset = (static_cast<size_t>(source_y) * width + source_x) * 4u;
                 const float normalized = static_cast<float>(input_rgba[offset + static_cast<size_t>(c)]) / 255.f;
-                plane[static_cast<size_t>(y) * padded_width + x] = ncnn::float32_to_float16(normalized);
+                plane[static_cast<size_t>(y) * padded_width + x] = normalized;
             }
         }
     }
