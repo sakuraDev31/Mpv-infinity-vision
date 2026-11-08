@@ -38,6 +38,65 @@ static bool resolveBlobNames(const char* paramPath, std::string& inputName, std:
     return !inputName.empty() && !outputName.empty();
 }
 
+
+static bool runSmoke(ncnn::Net& net,
+                     const std::string& inputBlob,
+                     const std::string& outputBlob,
+                     int width,
+                     int height) {
+    // The exported graph and Android JNI staging API both use normalized FP32 input.
+    ncnn::Mat input(width, height, 3, sizeof(float));
+    if (input.empty()) {
+        std::fprintf(stderr, "could not allocate FP32 input tensor: %d x %d\n", width, height);
+        return false;
+    }
+
+    for (int c = 0; c < input.c; ++c) {
+        float* plane = static_cast<float*>(input.channel(c));
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                plane[y * width + x] = 0.15f + 0.1f * static_cast<float>((x + y + c) % 7) / 6.0f;
+            }
+        }
+    }
+
+    ncnn::Extractor extractor = net.create_extractor();
+    extractor.set_light_mode(true);
+    if (extractor.input(inputBlob.c_str(), input) != 0) {
+        std::fprintf(stderr, "ncnn input blob rejected (%d x %d): %s\n",
+                     width, height, inputBlob.c_str());
+        return false;
+    }
+
+    ncnn::Mat output;
+    if (extractor.extract(outputBlob.c_str(), output) != 0) {
+        std::fprintf(stderr, "ncnn output extraction failed (%d x %d): %s\n",
+                     width, height, outputBlob.c_str());
+        return false;
+    }
+    if (output.empty() || output.w != width || output.h != height || output.c != 3 ||
+        (output.elemsize != sizeof(float) && output.elemsize != sizeof(unsigned short))) {
+        std::fprintf(stderr, "unexpected output for %d x %d: %d x %d x %d, elemsize=%zu\n",
+                     width, height, output.w, output.h, output.c, output.elemsize);
+        return false;
+    }
+
+    const size_t count = output.total() * output.elempack;
+    for (size_t i = 0; i < count; ++i) {
+        const float value = output.elemsize == sizeof(unsigned short)
+            ? ncnn::float16_to_float32(static_cast<const unsigned short*>(output.data)[i])
+            : static_cast<const float*>(output.data)[i];
+        if (!std::isfinite(value)) {
+            std::fprintf(stderr, "non-finite output at %zu for %d x %d\n", i, width, height);
+            return false;
+        }
+    }
+
+    std::printf("DRUNet ncnn smoke passed: input=%s output=%s shape=%d x %d x %d elem=%zu\n",
+                inputBlob.c_str(), outputBlob.c_str(), output.w, output.h, output.c, output.elemsize);
+    return true;
+}
+
 int main(int argc, char** argv) {
     if (argc != 3) {
         std::fprintf(stderr, "usage: neural_model_smoke <model.param> <model.bin>\n");
@@ -58,67 +117,19 @@ int main(int argc, char** argv) {
     net.opt.use_fp16_storage = false;
     net.opt.use_fp16_arithmetic = false;
 
-    const int param_result = net.load_param(argv[1]);
-    if (param_result != 0) {
-        std::fprintf(stderr, "ncnn load_param failed: %d\n", param_result);
+    const int paramResult = net.load_param(argv[1]);
+    if (paramResult != 0) {
+        std::fprintf(stderr, "ncnn load_param failed: %d\n", paramResult);
         return 10;
     }
-    const int model_result = net.load_model(argv[2]);
-    if (model_result != 0) {
-        std::fprintf(stderr, "ncnn load_model failed: %d\n", model_result);
+    const int modelResult = net.load_model(argv[2]);
+    if (modelResult != 0) {
+        std::fprintf(stderr, "ncnn load_model failed: %d\n", modelResult);
         return 11;
     }
 
-    // The model card specifies RGB NCHW float32 in [0, 1] and dimensions divisible by eight.
-    constexpr int width = 128;
-    constexpr int height = 128;
-    // The published ONNX export has FP16 input tensors; ncnn Mat accepts 16-bit
-    // elements directly. Keep values normalized to the model's documented [0, 1] range.
-    ncnn::Mat input(width, height, 3, sizeof(unsigned short));
-    if (input.empty()) {
-        std::fprintf(stderr, "could not allocate FP16 input tensor\n");
-        return 16;
-    }
-    for (int c = 0; c < input.c; ++c) {
-        unsigned short* plane = static_cast<unsigned short*>(input.channel(c));
-        for (int y = 0; y < height; ++y) {
-            for (int x = 0; x < width; ++x) {
-                const float value = 0.15f + 0.1f * static_cast<float>((x + y + c) % 7) / 6.0f;
-                plane[y * width + x] = ncnn::float32_to_float16(value);
-            }
-        }
-    }
-
-    ncnn::Extractor extractor = net.create_extractor();
-    extractor.set_light_mode(true);
-    if (extractor.input(inputBlob.c_str(), input) != 0) {
-        std::fprintf(stderr, "ncnn input blob rejected: %s\n", inputBlob.c_str());
-        return 12;
-    }
-    ncnn::Mat output;
-    if (extractor.extract(outputBlob.c_str(), output) != 0) {
-        std::fprintf(stderr, "ncnn output extraction failed: %s\n", outputBlob.c_str());
-        return 13;
-    }
-    if (output.empty() || output.w != width || output.h != height || output.c != 3 ||
-        (output.elemsize != sizeof(float) && output.elemsize != sizeof(unsigned short))) {
-        std::fprintf(stderr, "unexpected output shape/type: %d x %d x %d, elemsize=%zu\n",
-                     output.w, output.h, output.c, output.elemsize);
-        return 14;
-    }
-    const size_t count = output.total() * output.elempack;
-    float firstValue = 0.f;
-    for (size_t i = 0; i < count; ++i) {
-        const float value = output.elemsize == sizeof(unsigned short)
-            ? ncnn::float16_to_float32(static_cast<const unsigned short*>(output.data)[i])
-            : static_cast<const float*>(output.data)[i];
-        if (!std::isfinite(value)) {
-            std::fprintf(stderr, "non-finite model output at %zu\n", i);
-            return 15;
-        }
-        if (i == 0) firstValue = value;
-    }
-    std::printf("DRUNet ncnn smoke test passed: input=%s output=%s shape=%d x %d x %d elem=%zu first=%0.6f\n",
-                inputBlob.c_str(), outputBlob.c_str(), output.w, output.h, output.c, output.elemsize, firstValue);
+    // Validate both declared spatial sizes with the same FP32 contract used by Android.
+    if (!runSmoke(net, inputBlob, outputBlob, 128, 128)) return 20;
+    if (!runSmoke(net, inputBlob, outputBlob, 512, 512)) return 21;
     return 0;
 }
