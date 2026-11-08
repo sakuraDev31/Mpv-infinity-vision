@@ -31,13 +31,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake ninja-build g++ git libprotobuf-dev protobuf-compiler python3-pip python3-venv
 
-      - name: Install pinned PNNX ONNX converter
+      - name: Install pinned PNNX and CPU PyTorch model exporter
         run: |
           python3 -m venv "$RUNNER_TEMP/pnnx-venv"
           "$RUNNER_TEMP/pnnx-venv/bin/python" -m pip install --upgrade pip
           "$RUNNER_TEMP/pnnx-venv/bin/python" -m pip install pnnx==20261020 onnx==1.20.1
+          # The checkpoint export stage imports torch; install the pinned CPU wheel here.
+          "$RUNNER_TEMP/pnnx-venv/bin/python" -m pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
+          "$RUNNER_TEMP/pnnx-venv/bin/python" - <<'PY'
+          import torch
+          print("PyTorch:", torch.__version__)
+          assert torch.__version__.split('+')[0] == "2.14.1"
+          print("CPU capability:", torch.backends.cpu.get_cpu_capability())
+          PY
           test -x "$RUNNER_TEMP/pnnx-venv/bin/pnnx"
           echo "PNNX_CONVERTER=$RUNNER_TEMP/pnnx-venv/bin/pnnx" >> "$GITHUB_ENV"
+          echo "MODEL_PYTHON=$RUNNER_TEMP/pnnx-venv/bin/python" >> "$GITHUB_ENV"
 
       - name: Build pinned CPU ncnn library for conversion smoke test
         env:
@@ -68,7 +77,7 @@ jobs:
           echo "21ee495de84de866d91af7c78e58cf8d1d68dc1d9016dd8e38f65f3a0559861e  $RUNNER_TEMP/drunet/drunet_student.pth" | sha256sum --check
           git clone --depth 1 https://github.com/seantempesta/remaster.git "$RUNNER_TEMP/remaster-source"
           git -C "$RUNNER_TEMP/remaster-source" submodule update --init --depth 1 reference-code/KAIR
-          python - "$RUNNER_TEMP/remaster-source" "$RUNNER_TEMP/drunet/drunet_student.pth" "$RUNNER_TEMP/drunet/drunet_student.pt" <<'PY'
+          "$MODEL_PYTHON" - "$RUNNER_TEMP/remaster-source" "$RUNNER_TEMP/drunet/drunet_student.pth" "$RUNNER_TEMP/drunet/drunet_student.pt" <<'PY'
           import os, sys, torch
           project, checkpoint, output = sys.argv[1:]
           sys.path.insert(0, project)
