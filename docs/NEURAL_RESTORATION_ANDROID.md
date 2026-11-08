@@ -1,9 +1,23 @@
-# DRUNet Android inference stage
+# DRUNet Android inference and Media3 integration
 
-The Standard product flavor builds the pinned Tencent ncnn runtime with its Vulkan backend; the noVulkan flavor builds the same ncnn runtime with CPU inference only. The app uses the source build at API 26+ so the Vulkan build retains ncnn's Android HardwareBuffer import API when the device exposes `VK_ANDROID_external_memory_android_hardware_buffer`.
+The repository bundles the verified Remaster DRUNet Student ncnn model at `app/src/main/assets/ai/restoration/remaster_drunet/`. The Standard product flavor builds the pinned Tencent ncnn runtime with Vulkan; the noVulkan flavor builds ncnn for CPU only. The app verifies both model files against `SHA256SUMS` before loading them.
 
-`DrunetNcnnEngine` is the Kotlin model owner. It verifies the model asset checksums, loads the `.param` and `.bin`, prefers Vulkan with optional CPU fallback, and exposes capability data for CPU, Vulkan compute and AHardwareBuffer import.
+`DrunetNcnnEngine` owns the model and exposes a direct RGBA8 SDR frame API. The Media3 Flow sink now has an explicit, default-off DRUNet control. When enabled, accepted SDR source frames pass through this experimental path:
 
-The current JNI frame API accepts direct RGBA8 SDR buffers, converts them to the model's normalized RGB FP16 tensor, pads dimensions to multiples of eight, runs same-resolution inference, blends the predicted result with the source using a 0..1 restoration strength, and returns a microsecond timing. This interface is for correctness and device benchmarking. It is **not yet connected to Media3FlowVideoSink or MPV's video output**; its CPU-visible buffer path is intentionally not treated as a zero-copy real-time solution.
+1. Media3 decodes to the sink's private `SurfaceTexture`.
+2. The existing color-conversion pass stages the frame into the sink's RGBA8 frame target.
+3. GLES reads that frame into a reusable direct CPU buffer; ncnn runs same-resolution restoration with Vulkan preferred (and CPU fallback enabled).
+4. The restored RGBA8 result is uploaded to a temporary GLES texture and blitted back into the same frame target before Flow consumes/presents it.
 
-The existing Media3Flow sink already stages decoded SDR video into RGBA8 AHardwareBuffers. A future playback path must import those buffers into ncnn's own Vulkan device, verify AHB import support at runtime, synchronize access to shared buffers, and export the restored output back into the presentable frame queue. HDR/10-bit and exact source-bit-depth preservation are not supported by this RGBA8 prototype.
+The model is loaded off the GLES callback thread, and frames bypass restoration while loading or after a processing failure. The runtime strength is blended in the native inference routine. The setting can be changed during playback without recreating the player. To limit inference memory use, frames with a longest edge above 512 pixels are bypassed unchanged; no downscale is performed.
+
+## Limitations
+
+- This is **not zero-copy**: `glReadPixels`, synchronous ncnn inference and a texture upload occur on the source-frame callback path. It can reduce frame rate substantially, stall playback, increase power use and heat. Keep it disabled for normal playback until device-specific benchmarks prove otherwise.
+- The current safe-size limit means only frames up to 512 px on their longest edge are processed. Larger frames continue through the normal renderer without DRUNet. This conservative limit avoids attempting large intermediate feature maps on mobile GPUs; it is not a statement that the model cannot accept larger input shapes.
+- It is limited to SDR frames accepted by the custom Media3 Flow renderer. HDR/Dolby Vision, MPV playback, DRM and formats routed to Media3's stock renderer are not processed.
+- Vulkan availability reported by ncnn is separate from the libplacebo/Vulkan frame-sharing context used by Media3 Flow. This initial integration uses CPU-visible RGBA staging; it does not import the Flow AHardwareBuffer directly into ncnn.
+- It is a spatial per-frame restoration model, not temporal denoising or frame interpolation. No real-time 1080p/60 performance is claimed. Validate detail retention, halos, ringing, colour stability, inference latency, dropped frames, memory, battery and thermal behavior on target devices.
+- The RGBA8 path is SDR only and does not preserve HDR or 10-bit source precision.
+
+The existing Anime4K shader restoration preference remains independent and continues to target the MPV shader path. DRUNet is a separate Media3-only option.

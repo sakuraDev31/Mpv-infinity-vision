@@ -1923,6 +1923,9 @@ class NativeMedia3Engine internal constructor(
     publishSnapshot()
   }
 
+  fun applyDrunetNcnnSettings(enabled: Boolean, strength: Int): Boolean =
+    media3FlowSink?.applyRuntimeDrunetNcnnSettings(enabled, strength) ?: false
+
   fun startFlowDiagnosticCapture(
     sessionId: String,
     baseDirectory: String,

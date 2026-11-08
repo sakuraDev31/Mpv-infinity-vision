@@ -33,6 +33,7 @@ import androidx.media3.exoplayer.video.VideoFrameMetadataListener
 import androidx.media3.exoplayer.video.VideoSink
 import app.infinity.mpvz.BuildConfig
 import app.infinity.mpvz.preferences.effectiveMpvFlowTargetFps
+import app.infinity.mpvz.domain.restoration.DrunetNcnnEngine
 import app.infinity.mpvz.preferences.MpvFlowComputeApi
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -141,6 +142,27 @@ class Media3FlowVideoSink(
   @Volatile private var targetFps = effectiveMpvFlowTargetFps(requestedTargetFps, displayHz)
   @Volatile private var interpolationEnabled = initialInterpolationEnabled
   private val quality = requestedQuality.coerceIn(0, 100)
+  /** Toggle the experimental DRUNet pass without rebuilding the Media3 player. */
+  fun applyRuntimeDrunetNcnnSettings(enabled: Boolean, strength: Int): Boolean {
+    if (disposed) return false
+    return glHandler.post {
+      val wasEnabled = drunetNcnnEnabled
+      drunetNcnnStrength = strength.coerceIn(0, 100)
+      drunetNcnnEnabled = enabled
+      if (enabled && !wasEnabled) {
+        drunetNcnnProcessingFailed = false
+        if (drunetNcnnLoadFailed) {
+          drunetNcnnLoadAttempted = false
+          drunetNcnnLoadFailed = false
+        }
+      }
+      if (enabled && drunetNcnnStrength > 0 && frameWidth > 0 && frameHeight > 0 &&
+        maxOf(frameWidth, frameHeight) <= DRUNET_NCNN_MAX_FRAME_DIMENSION
+      ) requestDrunetNcnnModelLoad()
+      Log.i(logTag, "DRUNet runtime setting enabled=$enabled strength=${drunetNcnnStrength}%")
+    }
+  }
+
   /** Apply runtime controls in GL order without blocking the UI thread. */
   suspend fun applyRuntimeInterpolation(
     enabled: Boolean,
@@ -366,6 +388,23 @@ class Media3FlowVideoSink(
   private var gridWidth = 0
   private var gridHeight = 0
   private var outputTexture = 0
+  @Volatile private var drunetNcnnEnabled = false
+  @Volatile private var drunetNcnnStrength = 70
+  @Volatile private var drunetNcnnEngine: DrunetNcnnEngine? = null
+  private val drunetModelLock = Any()
+  @Volatile private var drunetNcnnLoadAttempted = false
+  @Volatile private var drunetNcnnLoadFailed = false
+  @Volatile private var drunetNcnnProcessingFailed = false
+  @Volatile private var drunetNcnnBackendName = "uninitialized"
+  private var drunetOversizeLogged = false
+  private var drunetLoaderThread: HandlerThread? = null
+  private var drunetLoaderHandler: Handler? = null
+  private var drunetInputBuffer: ByteBuffer? = null
+  private var drunetOutputBuffer: ByteBuffer? = null
+  private var drunetOutputTexture = 0
+  private var drunetBufferWidth = 0
+  private var drunetBufferHeight = 0
+  private var lastDrunetTimingLogNs = 0L
   @Volatile private var flowVulkanContext = 0L
   private var inputRequiredHardwareBufferUsage = 0L
   private var outputRequiredHardwareBufferUsage = 0L
@@ -386,7 +425,7 @@ class Media3FlowVideoSink(
         "requested_compute_api=${requestedComputeApi.name.lowercase()} " +
         "visibility_resolver=$visibilityResolverEnabled soft_blend=$softBlendEnabled " +
         "target_fps=$targetFps source_pts=media3_decoder sync_mode=1x hardware_decoder=media3 " +
-        "cpu_readback=no",
+        "drunet_ncnn=$drunetNcnnEnabled cpu_readback=$drunetNcnnEnabled",
     )
     val buildSupportsVulkan = BuildConfig.MPV_SUPPORTS_VULKAN
     val apiLevelSupported = Build.VERSION.SDK_INT >= 26
@@ -1552,6 +1591,7 @@ class Media3FlowVideoSink(
       return
     }
     copyExternalTexture(slot.colorTexture, transform)
+    if (drunetNcnnEnabled) processDrunetNcnnFrame(slot)
     if (flowAvailable) {
       try {
         prepareSharedFrame(slot)
@@ -2988,6 +3028,154 @@ class Media3FlowVideoSink(
     checkGlError("input copy unbind framebuffer", frameProbeOnly = true)
   }
 
+  /** Load the model away from the GLES callback; frames bypass restoration until it is ready. */
+  private fun requestDrunetNcnnModelLoad() {
+    if (!drunetNcnnEnabled || disposed || drunetNcnnLoadAttempted || drunetNcnnEngine != null) return
+    drunetNcnnLoadAttempted = true
+    val thread = HandlerThread("Media3Flow-DRUNet").apply { start() }
+    drunetLoaderThread = thread
+    val handler = Handler(thread.looper)
+    drunetLoaderHandler = handler
+    if (!handler.post {
+        val engine = DrunetNcnnEngine(appContext)
+        val loaded = runCatching {
+          engine.load(
+            preferVulkan = BuildConfig.MPV_SUPPORTS_VULKAN,
+            allowCpuFallback = true,
+          )
+        }.onFailure { error -> Log.e(logTag, "DRUNet model initialization failed", error) }.getOrNull()
+        if (loaded == null) {
+          engine.close()
+          drunetNcnnLoadFailed = true
+          Log.e(logTag, "DRUNet model unavailable; Media3 frames will continue unmodified")
+        } else {
+          synchronized(drunetModelLock) {
+            if (disposed) {
+              engine.close()
+            } else if (!drunetNcnnEnabled) {
+              engine.close()
+              drunetNcnnLoadAttempted = false
+            } else {
+              drunetNcnnBackendName = loaded.backend
+              drunetNcnnEngine = engine
+              Log.i(logTag, "DRUNet model ready backend=${loaded.backend} input=${loaded.inputBlob} output=${loaded.outputBlob}")
+            }
+          }
+        }
+      }
+    ) {
+      thread.quitSafely()
+      drunetLoaderThread = null
+      drunetLoaderHandler = null
+      drunetNcnnLoadFailed = true
+    }
+  }
+
+  /**
+   * Experimental SDR path: read the already-normalized RGBA8 frame, run ncnn, then render the
+   * result back into the original frame target. This deliberately favors correctness over latency;
+   * it is not a zero-copy or real-time guarantee and runs only after explicit user opt-in.
+   */
+  private fun processDrunetNcnnFrame(slot: FrameSlot) {
+    if (drunetNcnnStrength <= 0) return
+    if (maxOf(frameWidth, frameHeight) > DRUNET_NCNN_MAX_FRAME_DIMENSION) {
+      if (!drunetOversizeLogged) {
+        drunetOversizeLogged = true
+        Log.w(
+          logTag,
+          "DRUNet bypass: frame=${frameWidth}x${frameHeight} exceeds the ${DRUNET_NCNN_MAX_FRAME_DIMENSION}px safety limit",
+        )
+      }
+      return
+    }
+    val engine = drunetNcnnEngine
+    if (engine == null) {
+      requestDrunetNcnnModelLoad()
+      return
+    }
+    if (drunetNcnnProcessingFailed || frameWidth <= 0 || frameHeight <= 0) return
+    val requiredLong = frameWidth.toLong() * frameHeight.toLong() * 4L
+    if (requiredLong <= 0L || requiredLong > Int.MAX_VALUE) return
+    val required = requiredLong.toInt()
+    try {
+      if (drunetBufferWidth != frameWidth || drunetBufferHeight != frameHeight ||
+        drunetInputBuffer?.capacity() != required || drunetOutputBuffer?.capacity() != required
+      ) {
+        drunetInputBuffer = ByteBuffer.allocateDirect(required).order(ByteOrder.nativeOrder())
+        drunetOutputBuffer = ByteBuffer.allocateDirect(required).order(ByteOrder.nativeOrder())
+        if (drunetOutputTexture != 0) deleteTexture(drunetOutputTexture)
+        drunetOutputTexture = createTexture(GLES20.GL_TEXTURE_2D, frameWidth, frameHeight, GLES30.GL_RGBA8)
+        drunetBufferWidth = frameWidth
+        drunetBufferHeight = frameHeight
+      }
+      val input = checkNotNull(drunetInputBuffer)
+      val output = checkNotNull(drunetOutputBuffer)
+
+      // Read from the same color-converted target that Flow would otherwise consume.
+      GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, framebuffer)
+      GLES20.glFramebufferTexture2D(
+        GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, slot.colorTexture, 0,
+      )
+      check(GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER) == GLES20.GL_FRAMEBUFFER_COMPLETE) {
+        "DRUNet input framebuffer is incomplete"
+      }
+      input.clear()
+      GLES20.glReadPixels(0, 0, frameWidth, frameHeight, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, input)
+      checkGlError("DRUNet frame readback")
+      GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+      input.position(0)
+      output.clear()
+
+      val inferenceUs = engine.processRgba(
+        input = input,
+        output = output,
+        width = frameWidth,
+        height = frameHeight,
+        strength = drunetNcnnStrength.coerceIn(0, 100) / 100f,
+      ) ?: throw IllegalStateException("ncnn rejected the current frame dimensions or buffers")
+
+      // Upload into a normal GLES texture, then blit into the Flow/AHB-backed destination.
+      GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, drunetOutputTexture)
+      output.position(0)
+      GLES20.glTexSubImage2D(
+        GLES20.GL_TEXTURE_2D, 0, 0, 0, frameWidth, frameHeight,
+        GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, output,
+      )
+      checkGlError("DRUNet output upload")
+      GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, framebuffer)
+      GLES20.glFramebufferTexture2D(
+        GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, slot.colorTexture, 0,
+      )
+      check(GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER) == GLES20.GL_FRAMEBUFFER_COMPLETE) {
+        "DRUNet output framebuffer is incomplete"
+      }
+      GLES20.glViewport(0, 0, frameWidth, frameHeight)
+      GLES20.glUseProgram(blitProgram)
+      bindTextureUnit(0, drunetOutputTexture)
+      GLES20.glUniform1i(blitImageLocation, 0)
+      GLES20.glUniform2f(blitTextureScaleLocation, 1f, 1f)
+      GLES20.glUniform2f(blitTextureOffsetLocation, 0f, 0f)
+      GLES20.glUniform1i(blitRotationLocation, 0)
+      drawFullscreenTriangle()
+      checkGlError("DRUNet output blit")
+      GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+
+      val nowNs = System.nanoTime()
+      if (nowNs - lastDrunetTimingLogNs >= FLOW_SUMMARY_LOG_INTERVAL_NS) {
+        lastDrunetTimingLogNs = nowNs
+        Log.i(
+          logTag,
+          "event=drunet_frame state=processed size=${frameWidth}x${frameHeight} " +
+            "backend=$drunetNcnnBackendName inference_ms=${inferenceUs / 1000f} strength=${drunetNcnnStrength}%",
+        )
+      }
+    } catch (error: Exception) {
+      GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+      drunetNcnnProcessingFailed = true
+      Log.e(logTag, "DRUNet frame processing failed; bypassing further frames until toggled off/on", error)
+    }
+  }
+
   private fun makeSharedImageExternal(slot: FrameSlot, stage: String): Boolean {
     if (flowVulkanContext == 0L || slot.nativeImageHandle == 0L) return true
     val returned = runCatching {
@@ -3598,6 +3786,20 @@ class Media3FlowVideoSink(
 
   private fun destroyGlResources() {
     destroyFrameResources()
+    deleteTexture(drunetOutputTexture)
+    drunetOutputTexture = 0
+    drunetInputBuffer = null
+    drunetOutputBuffer = null
+    drunetBufferWidth = 0
+    drunetBufferHeight = 0
+    synchronized(drunetModelLock) {
+      drunetNcnnEngine?.close()
+      drunetNcnnEngine = null
+    }
+    drunetLoaderHandler?.removeCallbacksAndMessages(null)
+    drunetLoaderHandler = null
+    drunetLoaderThread?.quitSafely()
+    drunetLoaderThread = null
     presentationSlots.forEach { slot ->
       if (slot.producerFence != 0L) GLES30.glDeleteSync(slot.producerFence)
       if (slot.consumerFence != 0L) GLES30.glDeleteSync(slot.consumerFence)
@@ -3935,6 +4137,7 @@ class Media3FlowVideoSink(
     private const val MAX_STORED_FRAMES = 3
     private const val MAX_MOTION_PAIRS = 2
     private const val MAX_PRESENTATION_BUFFERS = 3
+    private const val DRUNET_NCNN_MAX_FRAME_DIMENSION = 512
   private const val PRESENTATION_FENCE_POLL_DELAY_MS = 1L
   private const val PRESENTATION_FENCE_TIMEOUT_NS = 5_000_000_000L
     private const val MAX_QUEUED_FRAMES = 5

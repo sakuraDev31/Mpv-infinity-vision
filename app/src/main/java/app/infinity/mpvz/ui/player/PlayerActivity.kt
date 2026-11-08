@@ -237,6 +237,10 @@ class PlayerActivity :
       media3FlowVisibilityResolverDebug = decoderPreferences.mpvFlowVisibilityResolverDebug.get(),
       media3FlowSoftBlendDebug = decoderPreferences.mpvFlowSoftBlendDebug.get(),
     ).also { engine ->
+      engine.applyDrunetNcnnSettings(
+        decoderPreferences.drunetNcnnEnabled.get(),
+        decoderPreferences.drunetNcnnStrength.get(),
+      )
       engine.onEnded = { itemToken ->
         val callbackToken = capturePlayerObserverCallbackToken()
         runOnUiThread {
@@ -1525,6 +1529,18 @@ class PlayerActivity :
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+    lifecycleScope.launch {
+      repeatOnLifecycle(Lifecycle.State.STARTED) {
+        combine(
+          decoderPreferences.drunetNcnnEnabled.changes(),
+          decoderPreferences.drunetNcnnStrength.changes(),
+        ) { enabled, strength -> enabled to strength }
+          .distinctUntilChanged()
+          .collect { (enabled, strength) ->
+            nativeEngineOrNull()?.applyDrunetNcnnSettings(enabled, strength)
+          }
+      }
+    }
     activeNativeCloseActivity = WeakReference(this)
     requestAudioOpenFromMini(intent)
     Log.i(

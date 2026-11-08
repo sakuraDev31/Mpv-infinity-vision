@@ -105,6 +105,10 @@ class DecoderPreferences(
   val hueFilter = preferenceStore.getInt("filter_hue")
   val sharpnessFilter = preferenceStore.getInt("filter_sharpness")
 
+  // DRUNet NCNN runs on the opt-in Media3 SDR frame path.
+  val drunetNcnnEnabled = preferenceStore.getBoolean("drunet_ncnn_enabled", false)
+  val drunetNcnnStrength = preferenceStore.getInt("drunet_ncnn_strength", 70)
+
   // Frame restoration preferences (GPU CNN shader prototype; separate from Anime4K upscaling).
   val frameRestorationEnabled = preferenceStore.getBoolean("frame_restoration_enabled", false)
   val frameRestorationProfile = preferenceStore.getEnum("frame_restoration_profile", FrameRestorationProfile.BALANCED)

@@ -17,9 +17,9 @@ import java.security.MessageDigest
 /**
  * Loads and owns the Remaster DRUNet Student ncnn model.
  *
- * This engine currently exposes a one-frame RGBA8 SDR staging API for correctness and latency
- * measurements. It is not connected to the playback Surface yet. The standard build may execute
- * on ncnn Vulkan; CPU remains the fallback. AHardwareBuffer capability is reported independently.
+ * The Media3 Flow sink calls this one-frame RGBA8 SDR staging API after its color-conversion pass.
+ * The standard build may execute on ncnn Vulkan; CPU remains the fallback. The caller owns frame
+ * readback/upload and must enforce its own resolution/performance limits. AHardwareBuffer capability is reported independently.
  */
 class DrunetNcnnEngine(context: Context) : AutoCloseable {
   private val appContext = context.applicationContext

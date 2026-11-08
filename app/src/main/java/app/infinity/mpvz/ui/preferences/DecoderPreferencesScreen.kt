@@ -514,6 +514,51 @@ object DecoderPreferencesScreen : Screen {
                 PreferenceDivider()
               }
 
+              val drunetNcnnEnabled by preferences.drunetNcnnEnabled.collectAsState()
+              val drunetNcnnStrength by preferences.drunetNcnnStrength.collectAsState()
+              Text(
+                "DRUNet NCNN (Experimental · Media3 SDR)",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+              )
+              SwitchPreference(
+                modifier = Modifier.padding(horizontal = 4.dp),
+                value = drunetNcnnEnabled,
+                enabled = BuildConfig.MPV_SUPPORTS_VULKAN,
+                onValueChange = preferences.drunetNcnnEnabled::set,
+                title = { Text("Enable DRUNet live-frame restoration") },
+                summary = {
+                  Text(
+                    if (BuildConfig.MPV_SUPPORTS_VULKAN) {
+                      "Runs the bundled DRUNet Student model on Media3 SDR frames up to 512 px on the longest edge; larger frames bypass it. Uses synchronous GPU-to-CPU RGBA readback and upload, so frame-rate loss is expected. HDR and MPV playback are not processed."
+                    } else {
+                      "Requires the Standard/Vulkan build and a supported Media3 Flow device."
+                    },
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+              if (drunetNcnnEnabled) {
+                PreferenceDivider()
+                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                  Text("DRUNet strength: ${drunetNcnnStrength.coerceIn(0, 100)}%", style = MaterialTheme.typography.titleSmall)
+                  Slider(
+                    value = drunetNcnnStrength.coerceIn(0, 100).toFloat(),
+                    onValueChange = { preferences.drunetNcnnStrength.set((it / 5f).roundToInt() * 5) },
+                    valueRange = 0f..100f,
+                    steps = 19,
+                    enabled = BuildConfig.MPV_SUPPORTS_VULKAN,
+                  )
+                  Text(
+                    "0% bypasses the model output; 100% uses the full restored prediction. The setting applies only while the custom Media3 Flow renderer is active.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                }
+                PreferenceDivider()
+              }
+
               val enableAnime4K by preferences.enableAnime4K.collectAsState()
               SwitchPreference(
                 modifier = Modifier.settingsSearchTarget(R.string.pref_anime4k_title),
